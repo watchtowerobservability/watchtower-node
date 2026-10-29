@@ -5,9 +5,12 @@ const { trace } = require('@opentelemetry/api');
 const { Resource } = require('@opentelemetry/resources');
 const { BatchSpanProcessor } = require('@opentelemetry/sdk-trace-base');
 const { NodeTracerProvider } = require('@opentelemetry/sdk-trace-node');
+const { LoggerProvider, SimpleLogRecordProcessor, BatchLogRecordProcessor } = require('@opentelemetry/sdk-logs');
 const { SpoolExporter } = require('./buffer');
+const { captureException, installProcessHandlers, dropReserved } = require('./errors');
 
 const DEFAULT_ENDPOINT = 'http://localhost:4318';
+const SEVERITY = { trace: 1, debug: 5, info: 9, warn: 13, error: 17, fatal: 21 };
 
 /** Drop caller-supplied wt.* keys: tenant identity comes only from the key. */
 function safeResource(attrs) {
@@ -17,14 +20,23 @@ function safeResource(attrs) {
 class Client {
   constructor(opts) {
     const o = opts || {};
-    if (!o.apiKey) throw new Error('apiKey is required');
     const env = process.env;
+    const apiKey = o.apiKey || env.WT_INGEST_KEY;
+    if (!apiKey) throw new Error('apiKey is required (or set WT_INGEST_KEY)');
     this.endpoint = (o.endpoint || env.WT_OTLP_ENDPOINT || DEFAULT_ENDPOINT).replace(/\/+$/, '');
     this.apiUrl = (o.apiUrl || env.WT_API_URL || this.endpoint).replace(/\/+$/, '');
     this.project = o.project || env.WT_PROJECT_ID;
-    this.headers = { Authorization: `Bearer ${o.apiKey}` };
+    this.headers = { Authorization: `Bearer ${apiKey}` };
     this.fetch = o.fetch || globalThis.fetch;
-    const resource = new Resource({ 'service.name': o.serviceName || 'app', ...safeResource(o.resource) });
+    const environment = o.environment || env.WT_ENVIRONMENT;
+    const release = o.release || env.WT_RELEASE;
+    const resource = new Resource({
+      'service.name': o.serviceName || env.WT_SERVICE || 'app',
+      ...(environment && { 'deployment.environment.name': environment }),
+      ...(release && { 'service.version': release }),
+      ...safeResource(o.resource),
+    });
+    this.redact = o.redact;
     this.provider = new NodeTracerProvider({ resource });
     if (o.redact) this.provider.addSpanProcessor(redactor(o.redact));
     let exporter = o.exporter;
@@ -36,6 +48,37 @@ class Client {
     }
     this.provider.addSpanProcessor(new BatchSpanProcessor(exporter));
     this.tracer = this.provider.getTracer('watchtower');
+    this.loggerProvider = new LoggerProvider({ resource });
+    let logExporter = o.logExporter;
+    if (!logExporter && !o.exporter) {
+      const { OTLPLogExporter } = require('@opentelemetry/exporter-logs-otlp-http');
+      logExporter = new OTLPLogExporter({ url: `${this.endpoint}/v1/logs`, headers: this.headers });
+    }
+    if (logExporter) {
+      this.loggerProvider.addLogRecordProcessor(
+        o.logExporter ? new SimpleLogRecordProcessor(logExporter) : new BatchLogRecordProcessor(logExporter));
+    }
+    this.logger = this.loggerProvider.getLogger('watchtower');
+  }
+
+  /** Emit an OTLP log record; trace and span ids come from the active context. */
+  log(level, body, attributes) {
+    let attrs = dropReserved(attributes);
+    if (this.redact) attrs = Object.fromEntries(Object.entries(attrs).map(([k, v]) => [k, this.redact(k, v)]));
+    this.logger.emit({ severityNumber: SEVERITY[level] || SEVERITY.info, severityText: String(level).toUpperCase(), body, attributes: attrs });
+  }
+
+  forceFlush() {
+    return Promise.all([this.provider.forceFlush(), this.loggerProvider.forceFlush()]);
+  }
+
+  // keep the key out of console.log / JSON.stringify
+  toJSON() {
+    return { endpoint: this.endpoint, project: this.project, headers: { Authorization: 'Bearer ****' } };
+  }
+
+  [require('node:util').inspect.custom]() {
+    return `Client ${JSON.stringify(this)}`;
   }
 
   async _call(method, path, body) {
@@ -117,7 +160,7 @@ class Client {
   }
 
   shutdown() {
-    return this.provider.shutdown();
+    return Promise.all([this.provider.shutdown(), this.loggerProvider.shutdown()]).then(() => undefined);
   }
 }
 
@@ -134,8 +177,13 @@ function redactor(hook) {
 
 let current;
 function init(opts) {
+  if (current && current.uninstall) current.uninstall();
   current = new Client(opts);
   current.provider.register(); // global tracer + async context so trace.getActiveSpan() works
+  if ((opts || {}).captureProcessErrors !== false) {
+    const c = current;
+    c.uninstall = installProcessHandlers(() => c.forceFlush());
+  }
   return current;
 }
 function need() {
@@ -147,6 +195,9 @@ module.exports = {
   Client,
   init,
   safeResource,
+  captureException,
+  flush: () => (current ? current.forceFlush() : Promise.resolve()),
+  log: (l, b, a) => need().log(l, b, a),
   DEFAULT_ENDPOINT,
   getPrompt: (id) => need().getPrompt(id),
   score: (t, v, o) => need().score(t, v, o),

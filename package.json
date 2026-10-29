@@ -10,17 +10,31 @@
   "exports": {
     ".": { "types": "./src/index.d.ts", "default": "./src/index.js" },
     "./jest": "./src/jest.js",
-    "./vitest": "./src/vitest.js"
+    "./vitest": "./src/vitest.js",
+    "./express": { "types": "./src/integrations/express.d.ts", "default": "./src/integrations/express.js" },
+    "./fastify": { "types": "./src/integrations/fastify.d.ts", "default": "./src/integrations/fastify.js" },
+    "./koa": { "types": "./src/integrations/koa.d.ts", "default": "./src/integrations/koa.js" },
+    "./nestjs": { "types": "./src/integrations/nestjs.d.ts", "default": "./src/integrations/nestjs.js" },
+    "./next": { "types": "./src/integrations/next.d.ts", "default": "./src/integrations/next.js" },
+    "./prisma": { "types": "./src/integrations/prisma.d.ts", "default": "./src/integrations/prisma.js" },
+    "./lambda": { "types": "./src/integrations/lambda.d.ts", "default": "./src/integrations/lambda.js" },
+    "./genai": { "types": "./src/integrations/genai.d.ts", "default": "./src/integrations/genai.js" },
+    "./logs": { "types": "./src/integrations/logs.d.ts", "default": "./src/integrations/logs.js" }
   },
   "license": "Apache-2.0",
   "engines": { "node": ">=18" },
   "scripts": { "test": "node --test test/*.test.js" },
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/exporter-logs-otlp-http": "^0.57.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.57.0",
     "@opentelemetry/otlp-transformer": "^0.57.0",
     "@opentelemetry/resources": "^1.30.0",
+    "@opentelemetry/sdk-logs": "^0.57.0",
     "@opentelemetry/sdk-trace-base": "^1.30.0",
     "@opentelemetry/sdk-trace-node": "^1.30.0"
-  }
+  },
+  "peerDependencies": { "winston-transport": "^4.0.0" },
+  "peerDependenciesMeta": { "winston-transport": { "optional": true } },
+  "devDependencies": { "winston-transport": "^4.9.0" }
 }
