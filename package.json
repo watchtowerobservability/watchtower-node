@@ -1,0 +1,26 @@
+{
+  "name": "@watchtowerobservability/node",
+  "version": "0.1.0",
+  "repository": { "type": "git", "url": "git+https://github.com/watchtowerobservability/watchtower-node.git" },
+  "publishConfig": { "registry": "https://npm.pkg.github.com" },
+  "description": "Thin Watchtower distribution over the OpenTelemetry Node SDK (plain JavaScript)",
+  "main": "src/index.js",
+  "types": "src/index.d.ts",
+  "files": ["src"],
+  "exports": {
+    ".": { "types": "./src/index.d.ts", "default": "./src/index.js" },
+    "./jest": "./src/jest.js",
+    "./vitest": "./src/vitest.js"
+  },
+  "license": "Apache-2.0",
+  "engines": { "node": ">=18" },
+  "scripts": { "test": "node --test test/" },
+  "dependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.57.0",
+    "@opentelemetry/otlp-transformer": "^0.57.0",
+    "@opentelemetry/resources": "^1.30.0",
+    "@opentelemetry/sdk-trace-base": "^1.30.0",
+    "@opentelemetry/sdk-trace-node": "^1.30.0"
+  }
+}
