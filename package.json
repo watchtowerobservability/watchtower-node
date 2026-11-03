@@ -1,40 +1,221 @@
 {
   "name": "@watchtowerobservability/node",
-  "version": "0.1.0",
-  "repository": { "type": "git", "url": "git+https://github.com/watchtowerobservability/watchtower-node.git" },
-  "publishConfig": { "registry": "https://npm.pkg.github.com" },
-  "description": "Thin Watchtower distribution over the OpenTelemetry Node SDK (plain JavaScript)",
-  "main": "src/index.js",
-  "types": "src/index.d.ts",
-  "files": ["src"],
+  "version": "0.2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/watchtowerobservability/watchtower-node.git"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "description": "Thin Watchtower distribution over the OpenTelemetry Node SDK",
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/cjs/index.d.ts",
+  "files": [
+    "dist"
+  ],
   "exports": {
-    ".": { "types": "./src/index.d.ts", "default": "./src/index.js" },
-    "./jest": "./src/jest.js",
-    "./vitest": "./src/vitest.js",
-    "./express": { "types": "./src/integrations/express.d.ts", "default": "./src/integrations/express.js" },
-    "./fastify": { "types": "./src/integrations/fastify.d.ts", "default": "./src/integrations/fastify.js" },
-    "./koa": { "types": "./src/integrations/koa.d.ts", "default": "./src/integrations/koa.js" },
-    "./nestjs": { "types": "./src/integrations/nestjs.d.ts", "default": "./src/integrations/nestjs.js" },
-    "./next": { "types": "./src/integrations/next.d.ts", "default": "./src/integrations/next.js" },
-    "./prisma": { "types": "./src/integrations/prisma.d.ts", "default": "./src/integrations/prisma.js" },
-    "./lambda": { "types": "./src/integrations/lambda.d.ts", "default": "./src/integrations/lambda.js" },
-    "./genai": { "types": "./src/integrations/genai.d.ts", "default": "./src/integrations/genai.js" },
-    "./logs": { "types": "./src/integrations/logs.d.ts", "default": "./src/integrations/logs.js" }
+    ".": {
+      "import": {
+        "types": "./dist/esm/index.d.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/index.d.ts",
+        "default": "./dist/cjs/index.js"
+      }
+    },
+    "./probes": {
+      "import": {
+        "types": "./dist/esm/probes.d.ts",
+        "default": "./dist/esm/probes.js"
+      },
+      "require": {
+        "types": "./dist/cjs/probes.d.ts",
+        "default": "./dist/cjs/probes.js"
+      }
+    },
+    "./jest": {
+      "import": {
+        "types": "./dist/esm/jest.d.ts",
+        "default": "./dist/esm/jest.js"
+      },
+      "require": {
+        "types": "./dist/cjs/jest.d.ts",
+        "default": "./dist/cjs/jest.js"
+      }
+    },
+    "./vitest": {
+      "import": {
+        "types": "./dist/esm/vitest.d.ts",
+        "default": "./dist/esm/vitest.js"
+      },
+      "require": {
+        "types": "./dist/cjs/vitest.d.ts",
+        "default": "./dist/cjs/vitest.js"
+      }
+    },
+    "./test-plan": {
+      "import": {
+        "types": "./dist/esm/test-plan.d.ts",
+        "default": "./dist/esm/test-plan.js"
+      },
+      "require": {
+        "types": "./dist/cjs/test-plan.d.ts",
+        "default": "./dist/cjs/test-plan.js"
+      }
+    },
+    "./express": {
+      "import": {
+        "types": "./dist/esm/integrations/express.d.ts",
+        "default": "./dist/esm/integrations/express.js"
+      },
+      "require": {
+        "types": "./dist/cjs/integrations/express.d.ts",
+        "default": "./dist/cjs/integrations/express.js"
+      }
+    },
+    "./fastify": {
+      "import": {
+        "types": "./dist/esm/integrations/fastify.d.ts",
+        "default": "./dist/esm/integrations/fastify.js"
+      },
+      "require": {
+        "types": "./dist/cjs/integrations/fastify.d.ts",
+        "default": "./dist/cjs/integrations/fastify.js"
+      }
+    },
+    "./koa": {
+      "import": {
+        "types": "./dist/esm/integrations/koa.d.ts",
+        "default": "./dist/esm/integrations/koa.js"
+      },
+      "require": {
+        "types": "./dist/cjs/integrations/koa.d.ts",
+        "default": "./dist/cjs/integrations/koa.js"
+      }
+    },
+    "./nestjs": {
+      "import": {
+        "types": "./dist/esm/integrations/nestjs.d.ts",
+        "default": "./dist/esm/integrations/nestjs.js"
+      },
+      "require": {
+        "types": "./dist/cjs/integrations/nestjs.d.ts",
+        "default": "./dist/cjs/integrations/nestjs.js"
+      }
+    },
+    "./next": {
+      "import": {
+        "types": "./dist/esm/integrations/next.d.ts",
+        "default": "./dist/esm/integrations/next.js"
+      },
+      "require": {
+        "types": "./dist/cjs/integrations/next.d.ts",
+        "default": "./dist/cjs/integrations/next.js"
+      }
+    },
+    "./prisma": {
+      "import": {
+        "types": "./dist/esm/integrations/prisma.d.ts",
+        "default": "./dist/esm/integrations/prisma.js"
+      },
+      "require": {
+        "types": "./dist/cjs/integrations/prisma.d.ts",
+        "default": "./dist/cjs/integrations/prisma.js"
+      }
+    },
+    "./lambda": {
+      "import": {
+        "types": "./dist/esm/integrations/lambda.d.ts",
+        "default": "./dist/esm/integrations/lambda.js"
+      },
+      "require": {
+        "types": "./dist/cjs/integrations/lambda.d.ts",
+        "default": "./dist/cjs/integrations/lambda.js"
+      }
+    },
+    "./azure-functions": {
+      "import": {
+        "types": "./dist/esm/integrations/azure-functions.d.ts",
+        "default": "./dist/esm/integrations/azure-functions.js"
+      },
+      "require": {
+        "types": "./dist/cjs/integrations/azure-functions.d.ts",
+        "default": "./dist/cjs/integrations/azure-functions.js"
+      }
+    },
+    "./genai": {
+      "import": {
+        "types": "./dist/esm/integrations/genai.d.ts",
+        "default": "./dist/esm/integrations/genai.js"
+      },
+      "require": {
+        "types": "./dist/cjs/integrations/genai.d.ts",
+        "default": "./dist/cjs/integrations/genai.js"
+      }
+    },
+    "./logs": {
+      "import": {
+        "types": "./dist/esm/integrations/logs.d.ts",
+        "default": "./dist/esm/integrations/logs.js"
+      },
+      "require": {
+        "types": "./dist/cjs/integrations/logs.d.ts",
+        "default": "./dist/cjs/integrations/logs.js"
+      }
+    },
+    "./profiling": {
+      "import": {
+        "types": "./dist/esm/profiling.d.ts",
+        "default": "./dist/esm/profiling.js"
+      },
+      "require": {
+        "types": "./dist/cjs/profiling.d.ts",
+        "default": "./dist/cjs/profiling.js"
+      }
+    }
   },
   "license": "Apache-2.0",
-  "engines": { "node": ">=18" },
-  "scripts": { "test": "node --test test/*.test.js" },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "prepack": "npm run build"
+  },
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/exporter-logs-otlp-http": "^0.57.0",
+    "@opentelemetry/exporter-metrics-otlp-http": "^0.57.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.57.0",
     "@opentelemetry/otlp-transformer": "^0.57.0",
     "@opentelemetry/resources": "^1.30.0",
     "@opentelemetry/sdk-logs": "^0.57.0",
+    "@opentelemetry/sdk-metrics": "^1.30.0",
     "@opentelemetry/sdk-trace-base": "^1.30.0",
     "@opentelemetry/sdk-trace-node": "^1.30.0"
   },
-  "peerDependencies": { "winston-transport": "^4.0.0" },
-  "peerDependenciesMeta": { "winston-transport": { "optional": true } },
-  "devDependencies": { "winston-transport": "^4.9.0" }
+  "peerDependencies": {
+    "@opentelemetry/instrumentation-runtime-node": ">=0.12.0",
+    "winston-transport": "^4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@opentelemetry/instrumentation-runtime-node": {
+      "optional": true
+    },
+    "winston-transport": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "22.15.0",
+    "typescript": "5.7.2",
+    "vitest": "5.0.5",
+    "winston-transport": "^4.9.0"
+  }
 }

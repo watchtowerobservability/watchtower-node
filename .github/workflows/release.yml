@@ -1,13 +1,15 @@
 name: Release
+# Push a v<package.json version> tag: build, test, attest, GitHub release, then npm with provenance.
+# NPM_TOKEN is an org secret of watchtowerobservability. Re-running a tag skips what already exists.
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: write
-  id-token: write
+  id-token: write # npm provenance and build attestations
   attestations: write
-  packages: write
 
 jobs:
   release:
@@ -17,18 +19,28 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          registry-url: https://npm.pkg.github.com
-          scope: '@watchtowerobservability'
-      - run: npm ci
-      - run: npm test
-      - run: npm pack
+          registry-url: https://registry.npmjs.org
+      - name: Install
+        run: |
+          if [ -f pnpm-lock.yaml ]; then corepack enable && pnpm install --frozen-lockfile
+          elif [ -f package-lock.json ]; then npm ci --no-audit --no-fund
+          else npm install --no-audit --no-fund --no-package-lock; fi
+      - run: npm run build --if-present
+      - run: npm run typecheck --if-present
+      - run: npm test --if-present
+      - run: npm pack --ignore-scripts
       - uses: actions/attest-build-provenance@v2
         with:
           subject-path: '*.tgz'
       - name: GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" *.tgz --generate-notes --verify-tag
-      - run: npm publish
+        run: gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" *.tgz --generate-notes --verify-tag
+      - name: npm publish
         env:
-          NODE_AUTH_TOKEN: ${{ github.token }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          id="$(node -p 'const p=require("./package.json"); p.name+"@"+p.version')"
+          if npm view "$id" version >/dev/null 2>&1; then echo "$id already on npm"; exit 0; fi
+          npm publish *.tgz --provenance --access public
