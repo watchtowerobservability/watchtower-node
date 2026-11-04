@@ -5,7 +5,8 @@ import { MAX_STATEMENT_BYTES, normalizeAndHash, normalizeSql, querySummary, xxh3
 
 interface Vector { name: string; input: string; pg: boolean; normalized: string; hash: string }
 // Shared with the Rust normaliser (services/worker/src/sqlnorm.rs): the same file must pass there.
-const { vectors } = JSON.parse(fs.readFileSync(path.join(__dirname, '../../../testdata/sql_normalize_vectors.json'), 'utf8')) as {
+// shortcut: testdata/ is a copy of the monorepo testdata vectors (the public mirror has no parent dir); re-copy when those change.
+const { vectors } = JSON.parse(fs.readFileSync(path.join(__dirname, '../testdata/sql_normalize_vectors.json'), 'utf8')) as {
   vectors: Vector[];
 };
 
