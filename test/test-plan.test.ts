@@ -6,7 +6,7 @@ import type { ReadableSpan } from '@opentelemetry/sdk-trace-base';
 import * as wt from '../src/index.js';
 import Vitest from '../src/vitest.js';
 import Jest from '../src/jest.js';
-import { decider, fetchTestPlan, jestEnvironment, testId, toJunit, uploadResults, vitestSetup } from '../src/test-plan.js';
+import { coveredFiles, decider, fetchTestPlan, jestEnvironment, testId, toJunit, uploadCoverage, uploadResults, vitestSetup } from '../src/test-plan.js';
 import type { CircusEvent, PlanTask, TestPlan } from '../src/test-plan.js';
 
 const plan: TestPlan = {
@@ -156,4 +156,34 @@ test('toJunit escapes and uploads only with a run id', async () => {
   expect(x).toContain('<failure message="&#34;x&#34;"/>');
   const { c } = client();
   expect(await uploadResults(c, 's', [{ name: 'c', outcome: 'passed' }])).toBe(false);
+});
+
+test('coverage recording: istanbul hits per test file, uploaded as the coverage map', async () => {
+  const root = join(tmpdir(), 'repo');
+  const cov = {
+    [join(root, 'src/a.ts')]: { path: join(root, 'src/a.ts'), s: { 0: 1, 1: 0 } },
+    [join(root, 'src/unused.ts')]: { s: { 0: 0 } },
+    [join(tmpdir(), 'elsewhere.ts')]: { s: { 0: 3 } },
+  };
+  expect(coveredFiles(cov, root)).toStrictEqual(['src/a.ts']);
+  expect(coveredFiles(null, root)).toStrictEqual([]);
+  const calls: { url: string; body: string }[] = [];
+  const fetchImpl = (async (url: string, init: { body: string }) => {
+    calls.push({ url, body: init.body });
+    return { ok: true };
+  }) as unknown as typeof globalThis.fetch;
+  expect(await uploadCoverage('a.test.ts', ['vitest::a.test.ts > x'], cov, fetchImpl)).toBe(false); // no env
+  Object.assign(process.env, { WT_API_URL: 'http://api/', WT_PROJECT_ID: 'p1', WT_API_KEY: 'k', WT_SHA: 'abc' });
+  try {
+    expect(await uploadCoverage(join(process.cwd(), 'a.test.ts'), ['vitest::a.test.ts > x', 'vitest::a.test.ts > x'], {}, fetchImpl)).toBe(true);
+    expect(calls[0]!.url).toBe('http://api/v1/projects/p1/tests/coverage-map');
+    const body = JSON.parse(calls[0]!.body);
+    expect(body.sha).toBe('abc');
+    expect(body.tests).toHaveLength(1);
+    expect(body.tests[0].suite).toBe('vitest');
+    expect(body.tests[0].test).toBe('a.test.ts > x');
+    expect(body.tests[0].files.some((f: string) => f.endsWith('a.test.ts'))).toBe(true);
+  } finally {
+    for (const k of ['WT_API_URL', 'WT_PROJECT_ID', 'WT_API_KEY', 'WT_SHA']) delete process.env[k];
+  }
 });

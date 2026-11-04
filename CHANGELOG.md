@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Datastores and queues: new subpaths `sql` (shared SQL normalizer and `db.query.hash`, same as the server), `sqlite` (node:sqlite, better-sqlite3, sqlite3, libSQL), `duckdb`, `lmdb`, `level` (LevelDB/RocksDB), `cache` (node-cache, lru-cache, Keyv hit/miss), `pools` (MongoDB, mysql2, any pool), `orm` (Drizzle, Kysely, TypeORM, Sequelize, MikroORM), `amqp` (amqplib, rabbitmq-client), `nats`, `mqtt`, `pg-boss`, `graphile-worker`. SQL spans carry an N+1 hint (`db.n_plus_one`, `db.query.repeat_count`); statement text is opt-in (`queryText` / `WATCHTOWER_DB_QUERY_TEXT=1`) and literal-free. postgres.js spans gain `db.query.hash`; `querySummary` also returns `target`.
 - Metrics: the OTel metrics SDK with a periodic OTLP reader (delta temporality by default), set as the global meter provider by `init`; runtime metrics through the optional peer `@opentelemetry/instrumentation-runtime-node`; spooled to `bufferDir/metrics`. `WATCHTOWER_LOGS` / `WATCHTOWER_METRICS` (or `logs` / `metrics` options) switch the two signals, default on.
 
 - GenAI: `instrumentMistral`, `instrumentOllama`, `instrumentLlamaIndex(Settings)` and `instrumentOpenAIAgents(addTraceProcessor)`. Streams (`stream: true`, Mistral `chat.stream`) keep the span open until the stream ends and record time to first chunk, usage and finish reasons; tool calls become `gen_ai.tool.call` span events (name and id only) for every wrapper.

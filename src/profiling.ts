@@ -1,12 +1,13 @@
 // Continuous CPU profiler on V8's own sampler (`node:inspector`, no native addon): every
-// `periodMs` the CPU profile is folded into stacks and posted to the gateway's
-// Pyroscope-compatible `/ingest` as `<service>.cpu` (format `folded`). Best effort: a failed
-// upload is counted and dropped. `withSpan` labels samples taken while its function runs, joined
+// `periodMs` the CPU profile is folded into stacks, encoded as pprof and posted to the gateway's
+// `/v1/profiles?format=pprof` with `service` and `version`. Best effort: a failed upload is
+// counted and dropped. `withSpan` labels samples taken while its function runs, joined
 // on V8's sample timestamps, so a trace links to its exact profile.
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { Session } from 'node:inspector';
 import { promiseHooks } from 'node:v8';
 import { trace } from '@opentelemetry/api';
+import { foldedToPprof } from './pprof.js';
 
 export interface CallFrame {
   functionName: string;
@@ -129,7 +130,7 @@ export interface ProfilerOptions {
   tags?: Record<string, string | undefined>;
   /** Sampling interval in microseconds (default 10 000 = 100 Hz). */
   intervalUs?: number;
-  /** Upload period (default 15 000 ms). */
+  /** Upload period (default 60 000 ms). */
   periodMs?: number;
   /** Label `withSpan` code after `await` too (see [[enableAsyncSpanLabels]]). Default false. */
   asyncSpans?: boolean;
@@ -179,6 +180,14 @@ export function foldedBody(counts: Map<string, number>): string {
   return out;
 }
 
+/** `/v1/profiles?format=pprof&service=…&version=…` on the gateway. */
+export function profilesUrl(endpoint: string, service: string, version?: string): string {
+  const q = new URLSearchParams({ format: 'pprof', service });
+  if (version) q.set('version', version);
+  return `${endpoint.replace(/\/+$/, '')}/v1/profiles?${q}`;
+}
+
+/** Pyroscope-compatible `/ingest` URL for folded uploads (kept for callers; the Profiler sends pprof). */
 export function ingestUrl(endpoint: string, service: string, tags: Record<string, string | undefined>,
   fromS: number, untilS: number, hz: number): string {
   const labels = Object.entries(tags).filter(([, v]) => v).sort(([a], [b]) => a.localeCompare(b))
@@ -211,7 +220,7 @@ export class Profiler {
     this.service = o.service ?? process.env.WT_SERVICE ?? 'app';
     this.tags = { env: process.env.WT_ENVIRONMENT, version: process.env.WT_RELEASE, ...o.tags };
     this.intervalUs = Math.min(Math.max(o.intervalUs ?? 10_000, 1_000), 1_000_000);
-    this.periodMs = Math.max(o.periodMs ?? 15_000, 1_000);
+    this.periodMs = Math.max(o.periodMs ?? 60_000, 1_000);
     if (o.asyncSpans) enableAsyncSpanLabels();
   }
 
@@ -255,10 +264,10 @@ export class Profiler {
 
   async upload(counts: Map<string, number>, fromS: number, untilS: number): Promise<void> {
     try {
-      const hz = Math.round(1_000_000 / this.intervalUs);
-      const r = await fetch(ingestUrl(this.endpoint, this.service, this.tags, fromS, untilS, hz), {
-        method: 'POST', body: foldedBody(counts),
-        headers: { authorization: `Bearer ${this.key}`, 'content-type': 'text/plain' },
+      const body = foldedToPprof(counts, this.intervalUs * 1000, fromS * 1000, (untilS - fromS) * 1000);
+      const r = await fetch(profilesUrl(this.endpoint, this.service, this.tags.version), {
+        method: 'POST', body,
+        headers: { authorization: `Bearer ${this.key}`, 'content-type': 'application/octet-stream' },
         signal: AbortSignal.timeout(10_000),
       });
       if (r.ok) this.uploaded++;

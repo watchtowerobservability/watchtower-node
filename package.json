@@ -1,6 +1,6 @@
 {
   "name": "@watchtowerobservability/node",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/watchtowerobservability/watchtower-node.git"
@@ -25,6 +25,16 @@
       "require": {
         "types": "./dist/cjs/index.d.ts",
         "default": "./dist/cjs/index.js"
+      }
+    },
+    "./appsec": {
+      "import": {
+        "types": "./dist/esm/appsec.d.ts",
+        "default": "./dist/esm/appsec.js"
+      },
+      "require": {
+        "types": "./dist/cjs/appsec.d.ts",
+        "default": "./dist/cjs/appsec.js"
       }
     },
     "./probes": {
@@ -125,6 +135,156 @@
       "require": {
         "types": "./dist/cjs/integrations/prisma.d.ts",
         "default": "./dist/cjs/integrations/prisma.js"
+      }
+    },
+    "./bullmq": {
+      "import": {
+        "types": "./dist/esm/integrations/bullmq.d.ts",
+        "default": "./dist/esm/integrations/bullmq.js"
+      },
+      "require": {
+        "types": "./dist/cjs/integrations/bullmq.d.ts",
+        "default": "./dist/cjs/integrations/bullmq.js"
+      }
+    },
+    "./postgres": {
+      "import": {
+        "types": "./dist/esm/integrations/postgres.d.ts",
+        "default": "./dist/esm/integrations/postgres.js"
+      },
+      "require": {
+        "types": "./dist/cjs/integrations/postgres.d.ts",
+        "default": "./dist/cjs/integrations/postgres.js"
+      }
+    },
+    "./sql": {
+      "import": {
+        "types": "./dist/esm/sql.d.ts",
+        "default": "./dist/esm/sql.js"
+      },
+      "require": {
+        "types": "./dist/cjs/sql.d.ts",
+        "default": "./dist/cjs/sql.js"
+      }
+    },
+    "./sqlite": {
+      "import": {
+        "types": "./dist/esm/integrations/sqlite.d.ts",
+        "default": "./dist/esm/integrations/sqlite.js"
+      },
+      "require": {
+        "types": "./dist/cjs/integrations/sqlite.d.ts",
+        "default": "./dist/cjs/integrations/sqlite.js"
+      }
+    },
+    "./duckdb": {
+      "import": {
+        "types": "./dist/esm/integrations/duckdb.d.ts",
+        "default": "./dist/esm/integrations/duckdb.js"
+      },
+      "require": {
+        "types": "./dist/cjs/integrations/duckdb.d.ts",
+        "default": "./dist/cjs/integrations/duckdb.js"
+      }
+    },
+    "./lmdb": {
+      "import": {
+        "types": "./dist/esm/integrations/lmdb.d.ts",
+        "default": "./dist/esm/integrations/lmdb.js"
+      },
+      "require": {
+        "types": "./dist/cjs/integrations/lmdb.d.ts",
+        "default": "./dist/cjs/integrations/lmdb.js"
+      }
+    },
+    "./level": {
+      "import": {
+        "types": "./dist/esm/integrations/level.d.ts",
+        "default": "./dist/esm/integrations/level.js"
+      },
+      "require": {
+        "types": "./dist/cjs/integrations/level.d.ts",
+        "default": "./dist/cjs/integrations/level.js"
+      }
+    },
+    "./cache": {
+      "import": {
+        "types": "./dist/esm/integrations/cache.d.ts",
+        "default": "./dist/esm/integrations/cache.js"
+      },
+      "require": {
+        "types": "./dist/cjs/integrations/cache.d.ts",
+        "default": "./dist/cjs/integrations/cache.js"
+      }
+    },
+    "./pools": {
+      "import": {
+        "types": "./dist/esm/integrations/pools.d.ts",
+        "default": "./dist/esm/integrations/pools.js"
+      },
+      "require": {
+        "types": "./dist/cjs/integrations/pools.d.ts",
+        "default": "./dist/cjs/integrations/pools.js"
+      }
+    },
+    "./orm": {
+      "import": {
+        "types": "./dist/esm/integrations/orm.d.ts",
+        "default": "./dist/esm/integrations/orm.js"
+      },
+      "require": {
+        "types": "./dist/cjs/integrations/orm.d.ts",
+        "default": "./dist/cjs/integrations/orm.js"
+      }
+    },
+    "./amqp": {
+      "import": {
+        "types": "./dist/esm/integrations/amqp.d.ts",
+        "default": "./dist/esm/integrations/amqp.js"
+      },
+      "require": {
+        "types": "./dist/cjs/integrations/amqp.d.ts",
+        "default": "./dist/cjs/integrations/amqp.js"
+      }
+    },
+    "./nats": {
+      "import": {
+        "types": "./dist/esm/integrations/nats.d.ts",
+        "default": "./dist/esm/integrations/nats.js"
+      },
+      "require": {
+        "types": "./dist/cjs/integrations/nats.d.ts",
+        "default": "./dist/cjs/integrations/nats.js"
+      }
+    },
+    "./mqtt": {
+      "import": {
+        "types": "./dist/esm/integrations/mqtt.d.ts",
+        "default": "./dist/esm/integrations/mqtt.js"
+      },
+      "require": {
+        "types": "./dist/cjs/integrations/mqtt.d.ts",
+        "default": "./dist/cjs/integrations/mqtt.js"
+      }
+    },
+    "./pg-boss": {
+      "import": {
+        "types": "./dist/esm/integrations/pg-boss.d.ts",
+        "default": "./dist/esm/integrations/pg-boss.js"
+      },
+      "require": {
+        "types": "./dist/cjs/integrations/pg-boss.d.ts",
+        "default": "./dist/cjs/integrations/pg-boss.js"
+      }
+    },
+    "./graphile-worker": {
+      "import": {
+        "types": "./dist/esm/integrations/graphile-worker.d.ts",
+        "default": "./dist/esm/integrations/graphile-worker.js"
+      },
+      "require": {
+        "types": "./dist/cjs/integrations/graphile-worker.d.ts",
+        "default": "./dist/cjs/integrations/graphile-worker.js"
       }
     },
     "./lambda": {

@@ -10,13 +10,17 @@
 // - a test the project has never seen is retried up to `efd_retries` times (early flake detection).
 // The reporters upload the results as JUnit (`POST /v1/projects/{prj}/test-runs`) when
 // WT_CI_RUN_ID is set, which feeds flaky-test detection and auto-quarantine.
+// With WT_TIA_RECORD=1 (and WT_API_KEY) each test file's istanbul coverage (Vitest
+// `coverage.provider: 'istanbul'`, Jest `--coverage`) is uploaded as the per-test coverage map
+// (`PUT /v1/projects/{prj}/tests/coverage-map`): every test of the file gets the files the file
+// executed plus the test file itself, which Test Impact Analysis then uses to skip tests.
 //
 // Ids are `<suite>::<file relative to cwd> > <describe>... > <test>`, suite = WT_TEST_SUITE or
 // the framework name. Vitest:
 //   globalSetup: ['./wt-global.mjs']   // export { default } from '@watchtowerobservability/node/test-plan'
 //   setupFiles: ['./wt-setup.ts']      // import { beforeAll, afterEach } from 'vitest';
 //                                      // import { vitestSetup } from '@watchtowerobservability/node/test-plan';
-//                                      // vitestSetup({ beforeAll, afterEach });
+//                                      // vitestSetup({ beforeAll, afterEach, afterAll });
 // Jest: globalSetup as above, and testEnvironment: './wt-env.js' with
 //   module.exports = require('@watchtowerobservability/node/test-plan').jestEnvironment(require('jest-environment-node').TestEnvironment);
 import { execFileSync } from 'node:child_process';
@@ -153,14 +157,31 @@ export interface PlanTask {
   result?: { state?: string; errors?: { message?: string }[] };
 }
 
-/** Vitest's `beforeAll`/`afterEach`, passed in so this package does not import Vitest. */
+/** Vitest's `beforeAll`/`afterEach`/`afterAll`, passed in so this package does not import Vitest. */
 export interface VitestHooks {
   beforeAll(fn: (suite: PlanTask) => unknown): void;
   afterEach(fn: (ctx: { task: PlanTask; skip(note?: string): void }) => unknown): void;
+  /** needed for WT_TIA_RECORD=1 */
+  afterAll?(fn: (suite: PlanTask) => unknown): void;
+}
+
+/** Ids of the tests in `t` that ran (a skipped test executed nothing, so it gets no coverage). */
+function ranIds(t: PlanTask, suite: string, file: string | undefined, names: string[], out: string[]): string[] {
+  for (const c of t.tasks || []) {
+    const ran = c.mode !== 'skip' && c.mode !== 'todo' && !!c.result?.state && c.result.state !== 'skip';
+    if (c.tasks) ranIds(c, suite, file, [...names, c.name], out);
+    else if (ran) out.push(testId(suite, file, [...names, c.name]));
+  }
+  return out;
 }
 
 /** Applies the plan in a Vitest setup file. Decisions go to `task.meta.wt` for the reporter. */
 export function vitestSetup(hooks: VitestHooks): void {
+  if (process.env.WT_TIA_RECORD === '1' && hooks.afterAll) {
+    const suite = suiteName('vitest');
+    const g = globalThis as unknown as Record<string, unknown>;
+    hooks.afterAll((file) => uploadCoverage(file.filepath, ranIds(file, suite, file.filepath, [], []), g.__VITEST_COVERAGE__ || g.__coverage__));
+  }
   const plan = loadPlan();
   if (!plan) return;
   const decide = decider(plan);
@@ -230,6 +251,7 @@ export function jestEnvironment<B extends JestEnvBase>(Base: B): B {
     wtDecide = decider(loadPlan());
     wtSuite = suiteName('jest');
     wtRetrySaved: unknown[] = [];
+    wtRan: string[] = [];
 
     // any[]: see JestEnvBase
     constructor(...args: any[]) {
@@ -246,6 +268,11 @@ export function jestEnvironment<B extends JestEnvBase>(Base: B): B {
     async handleTestEvent(event: CircusEvent, state: unknown): Promise<void> {
       if (super.handleTestEvent) await super.handleTestEvent(event, state);
       const t = event.test;
+      if (event.name === 'test_done' && t && process.env.WT_TIA_RECORD === '1') this.wtRan.push(this.wtId(t));
+      if (event.name === 'run_finish' && process.env.WT_TIA_RECORD === '1') {
+        await uploadCoverage(this.wtFile, this.wtRan, this.global.__coverage__);
+        return;
+      }
       if (event.name === 'test_start' && t) {
         if (this.wtDecide(this.wtId(t)).skip) t.mode = 'skip';
       } else if (event.name === 'test_done' && t && t.errors.length > 0 && this.wtDecide(this.wtId(t)).quarantined) {
@@ -301,6 +328,66 @@ export async function uploadResults(client: Client | null, suite: string, tests:
   form.append('file', new Blob([toJunit(suite, tests)], { type: 'application/xml' }), 'junit.xml');
   try {
     const res = await client.fetch(projectUrl(client, 'test-runs'), { method: 'POST', headers: apiHeaders(client), body: form });
+    return res.ok;
+  } catch (_e) {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------- Test Impact Analysis recording
+
+let rootCache: string | undefined;
+
+/** The repository top level (git diff paths are relative to it), else the working directory. */
+function repoRoot(): string {
+  if (rootCache === undefined) {
+    try {
+      rootCache = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', timeout: 10_000 }).trim() || process.cwd();
+    } catch (_e) {
+      rootCache = process.cwd();
+    }
+  }
+  return rootCache;
+}
+
+const repoRel = (f: string, root: string): string => relative(root, f).split(sep).join('/');
+
+/** Repository-relative files with an executed statement in an istanbul coverage object. */
+export function coveredFiles(cov: unknown, root = repoRoot()): string[] {
+  const out = new Set<string>();
+  if (!cov || typeof cov !== 'object') return [];
+  for (const [key, fc] of Object.entries(cov as Record<string, { path?: string; s?: Record<string, number> }>)) {
+    if (!fc || !fc.s || !Object.values(fc.s).some((n) => n > 0)) continue;
+    const f = repoRel(fc.path || key, root);
+    if (f && !f.startsWith('..')) out.add(f);
+  }
+  return [...out].sort();
+}
+
+/**
+ * Uploads the coverage of one test file for its tests (`suite::rest` ids); never throws.
+ * Needs WT_API_URL, WT_PROJECT_ID and WT_API_KEY (the coverage map needs a project API key).
+ */
+export async function uploadCoverage(file: string | undefined, ids: string[], cov: unknown, fetchImpl: typeof globalThis.fetch = globalThis.fetch): Promise<boolean> {
+  const env = process.env;
+  const [api, project, key] = [env.WT_API_URL, env.WT_PROJECT_ID, env.WT_API_KEY];
+  if (!api || !project || !key || ids.length === 0) return false;
+  const root = repoRoot();
+  const files = coveredFiles(cov, root);
+  if (file) {
+    const self = repoRel(file, root);
+    if (self && !self.startsWith('..') && !files.includes(self)) files.push(self);
+  }
+  const tests = [...new Set(ids)].slice(0, 20_000).map((id) => {
+    const i = id.indexOf('::');
+    return { suite: i < 0 ? '' : id.slice(0, i), test: i < 0 ? id : id.slice(i + 2), files: files.slice(0, 2000) };
+  });
+  try {
+    const res = await fetchImpl(`${api.replace(/\/+$/, '')}/v1/projects/${encodeURIComponent(project)}/tests/coverage-map`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sha: (env.WT_SHA || env.GITHUB_SHA || env.CI_COMMIT_SHA || '').slice(0, 64), tests }),
+    });
     return res.ok;
   } catch (_e) {
     return false;

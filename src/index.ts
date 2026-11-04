@@ -19,6 +19,8 @@ import * as nodePath from 'node:path';
 import { captureException, installProcessHandlers, dropReserved } from './errors.js';
 import type { CaptureContext } from './errors.js';
 import { loadCaptureRules } from './payload.js';
+import { startProfiling } from './profiling.js';
+import type { Profiler } from './profiling.js';
 
 export { captureException, metrics, trace };
 export { setCaptureRules, capturePayload } from './payload.js';
@@ -109,6 +111,8 @@ export class Client {
   readonly meterProvider?: MeterProvider;
   private readonly stopRuntime: () => void = () => {};
   uninstall?: () => void;
+  /** Set when WT_PROFILING=1 started the continuous profiler. */
+  profiler?: Promise<Profiler | undefined>;
 
   constructor(opts: InitOptions) {
     const o = opts || {};
@@ -272,7 +276,7 @@ export class Client {
 
   shutdown(): Promise<void> {
     this.stopRuntime();
-    return Promise.all([this.provider.shutdown(), this.loggerProvider.shutdown(), this.meterProvider?.shutdown()]).then(() => undefined);
+    return Promise.all([this.profiler?.then((p) => p?.stop()),this.provider.shutdown(), this.loggerProvider.shutdown(), this.meterProvider?.shutdown()]).then(() => undefined);
   }
 }
 
@@ -290,12 +294,22 @@ function redactor(hook: (key: string, value: unknown) => unknown): SpanProcessor
 let current: Client | undefined;
 export function init(opts: InitOptions): Client {
   if (current && current.uninstall) current.uninstall();
+  void current?.profiler?.then((p) => p?.stop());
   const c = new Client(opts);
   current = c;
   c.provider.register(); // global tracer + async context so trace.getActiveSpan() works
   if (c.meterProvider) {
     metrics.disable(); // a re-init replaces the previous client's provider
     metrics.setGlobalMeterProvider(c.meterProvider);
+  }
+  if (process.env.WT_PROFILING === '1') {
+    const attrs = c.provider.resource.attributes;
+    c.profiler = startProfiling({
+      apiKey: c.headers.Authorization.slice('Bearer '.length),
+      endpoint: c.endpoint,
+      service: String(attrs['service.name']),
+      tags: { version: attrs['service.version'] as string | undefined },
+    }).catch(() => undefined); // best effort: never break init
   }
   if ((opts || {}).captureProcessErrors !== false) {
     c.uninstall = installProcessHandlers(() => c.forceFlush());
