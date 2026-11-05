@@ -1,6 +1,6 @@
 {
   "name": "@watchtowerobservability/node",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/watchtowerobservability/watchtower-node.git"
@@ -35,6 +35,16 @@
       "require": {
         "types": "./dist/cjs/appsec.d.ts",
         "default": "./dist/cjs/appsec.js"
+      }
+    },
+    "./iast": {
+      "import": {
+        "types": "./dist/esm/iast.d.ts",
+        "default": "./dist/esm/iast.js"
+      },
+      "require": {
+        "types": "./dist/cjs/iast.d.ts",
+        "default": "./dist/cjs/iast.js"
       }
     },
     "./probes": {
