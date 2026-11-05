@@ -368,7 +368,7 @@
     "@opentelemetry/sdk-logs": "^0.57.0",
     "@opentelemetry/sdk-metrics": "^1.30.0",
     "@opentelemetry/sdk-trace-base": "^1.30.0",
-    "@opentelemetry/sdk-trace-node": "^1.30.0"
+    "@opentelemetry/sdk-trace-node": "^2.12.0"
   },
   "peerDependencies": {
     "@opentelemetry/instrumentation-runtime-node": ">=0.12.0",
