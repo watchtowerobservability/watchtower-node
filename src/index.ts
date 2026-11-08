@@ -1,18 +1,13 @@
 // Thin Watchtower layer over the OpenTelemetry Node SDK: key header, endpoint default,
 // offline buffer, wt.*-safe resource attributes, redaction hook, getPrompt/score/evaluate/observe.
 import { inspect } from 'node:util';
-import { metrics, trace } from '@opentelemetry/api';
+import { context, metrics, propagation, trace } from '@opentelemetry/api';
 import type { AttributeValue, Tracer } from '@opentelemetry/api';
-import { Resource } from '@opentelemetry/resources';
-import type { ResourceAttributes } from '@opentelemetry/resources';
-import { BatchSpanProcessor } from '@opentelemetry/sdk-trace-base';
-import type { SpanExporter, SpanProcessor } from '@opentelemetry/sdk-trace-base';
-import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
-import { LoggerProvider, SimpleLogRecordProcessor, BatchLogRecordProcessor } from '@opentelemetry/sdk-logs';
-import type { LogRecordExporter } from '@opentelemetry/sdk-logs';
-import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
-import { OTLPLogExporter } from '@opentelemetry/exporter-logs-otlp-http';
+import type { DetectedResourceAttributes, Resource } from '@opentelemetry/resources';
+import type { SpanExporter, SpanProcessor, TracerProvider } from '@opentelemetry/sdk-trace';
+import type { LoggerProvider, LogRecordExporter } from '@opentelemetry/sdk-logs';
 import type { MeterProvider, PushMetricExporter } from '@opentelemetry/sdk-metrics';
+import { need as needPeer } from './load.js';
 import { SpoolExporter, spoolLogs } from './buffer.js';
 import { startMetrics, switchOn } from './metrics.js';
 import * as nodePath from 'node:path';
@@ -103,7 +98,8 @@ export class Client {
   readonly headers: { Authorization: string };
   readonly fetch: typeof fetch;
   readonly redact: InitOptions['redact'];
-  readonly provider: NodeTracerProvider;
+  readonly provider: TracerProvider;
+  readonly resource: Resource;
   readonly tracer: Tracer;
   readonly loggerProvider: LoggerProvider;
   readonly logger: ReturnType<LoggerProvider['getLogger']>;
@@ -126,36 +122,46 @@ export class Client {
     this.fetch = o.fetch || globalThis.fetch;
     const environment = o.environment || env.WT_ENVIRONMENT;
     const release = o.release || env.WT_RELEASE;
-    const resource = new Resource({
+    // the OTel SDK packages are optional peers, loaded here (not at import time) with a clear error when missing
+    const { resourceFromAttributes } = needPeer<typeof import('@opentelemetry/resources')>('@opentelemetry/resources');
+    const resource = resourceFromAttributes({
       'service.name': o.serviceName || env.WT_SERVICE || 'app',
       ...(environment ? { 'deployment.environment.name': environment } : {}),
       ...(release ? { 'service.version': release } : {}),
-      ...(safeResource(o.resource) as ResourceAttributes),
+      ...(safeResource(o.resource) as DetectedResourceAttributes),
     });
+    this.resource = resource;
     this.redact = o.redact;
-    this.provider = new NodeTracerProvider({ resource });
-    if (o.redact) this.provider.addSpanProcessor(redactor(o.redact));
     let exporter = o.exporter as SpanExporter | undefined;
     if (!exporter) {
       const url = `${this.endpoint}/v1/traces`;
+      const { OTLPTraceExporter } = needPeer<typeof import('@opentelemetry/exporter-trace-otlp-http')>('@opentelemetry/exporter-trace-otlp-http');
       exporter = new OTLPTraceExporter({ url, headers: this.headers });
       // spans and log records spool to their own subdirectories
       if (o.bufferDir) exporter = new SpoolExporter(exporter, nodePath.join(o.bufferDir, 'traces'), url, this.headers, this.fetch);
     }
-    this.provider.addSpanProcessor(new BatchSpanProcessor(exporter));
+    // the redactor runs first, so the batch processor exports redacted attributes
+    const { BatchSpanProcessor, TracerProvider: TP } = needPeer<typeof import('@opentelemetry/sdk-trace')>('@opentelemetry/sdk-trace');
+    this.provider = new TP({
+      resource,
+      spanProcessors: [...(o.redact ? [redactor(o.redact)] : []), new BatchSpanProcessor({ exporter })],
+    });
     this.tracer = this.provider.getTracer('watchtower');
-    this.loggerProvider = new LoggerProvider({ resource });
     const logsOn = switchOn('WATCHTOWER_LOGS', 'OTEL_LOGS_EXPORTER', o.logs);
     let logExporter = logsOn ? (o.logExporter as LogRecordExporter | undefined) : undefined;
     if (logsOn && !logExporter && !o.exporter) {
       const url = `${this.endpoint}/v1/logs`;
+      const { OTLPLogExporter } = needPeer<typeof import('@opentelemetry/exporter-logs-otlp-http')>('@opentelemetry/exporter-logs-otlp-http');
       logExporter = new OTLPLogExporter({ url, headers: this.headers });
       if (o.bufferDir) logExporter = spoolLogs(logExporter, nodePath.join(o.bufferDir, 'logs'), url, this.headers, this.fetch);
     }
-    if (logExporter) {
-      this.loggerProvider.addLogRecordProcessor(
-        o.logExporter ? new SimpleLogRecordProcessor(logExporter) : new BatchLogRecordProcessor(logExporter));
-    }
+    const { LoggerProvider: LP, SimpleLogRecordProcessor, BatchLogRecordProcessor } = needPeer<typeof import('@opentelemetry/sdk-logs')>('@opentelemetry/sdk-logs');
+    this.loggerProvider = new LP({
+      resource,
+      processors: !logExporter ? [] : [o.logExporter
+        ? new SimpleLogRecordProcessor({ exporter: logExporter })
+        : new BatchLogRecordProcessor({ exporter: logExporter })],
+    });
     this.logger = this.loggerProvider.getLogger('watchtower');
     // with a test span exporter only an explicit metric exporter is used, as for logs
     if (switchOn('WATCHTOWER_METRICS', 'OTEL_METRICS_EXPORTER', o.metrics) && (o.metricExporter || !o.exporter)) {
@@ -297,13 +303,23 @@ export function init(opts: InitOptions): Client {
   void current?.profiler?.then((p) => p?.stop());
   const c = new Client(opts);
   current = c;
-  c.provider.register(); // global tracer + async context so trace.getActiveSpan() works
+  // Global tracer + async context so trace.getActiveSpan() works; a re-init replaces the previous client's.
+  trace.disable();
+  context.disable();
+  propagation.disable();
+  const { AsyncLocalStorageContextManager } = needPeer<typeof import('@opentelemetry/context-async-hooks')>('@opentelemetry/context-async-hooks');
+  const { CompositePropagator, W3CBaggagePropagator, W3CTraceContextPropagator } = needPeer<typeof import('@opentelemetry/core')>('@opentelemetry/core');
+  context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
+  propagation.setGlobalPropagator(new CompositePropagator({
+    propagators: [new W3CTraceContextPropagator(), new W3CBaggagePropagator()],
+  }));
+  trace.setGlobalTracerProvider(c.provider);
   if (c.meterProvider) {
     metrics.disable(); // a re-init replaces the previous client's provider
     metrics.setGlobalMeterProvider(c.meterProvider);
   }
   if (process.env.WT_PROFILING === '1') {
-    const attrs = c.provider.resource.attributes;
+    const attrs = c.resource.attributes;
     c.profiler = startProfiling({
       apiKey: c.headers.Authorization.slice('Bearer '.length),
       endpoint: c.endpoint,

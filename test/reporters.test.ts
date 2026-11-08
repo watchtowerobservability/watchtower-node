@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import type { ReadableSpan } from '@opentelemetry/sdk-trace-base';
+import type { ReadableSpan } from '@opentelemetry/sdk-trace';
 import * as wt from '../src/index.js';
 import Jest from '../src/jest.js';
 import Vitest from '../src/vitest.js';

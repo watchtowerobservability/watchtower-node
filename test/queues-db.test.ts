@@ -1,7 +1,7 @@
 import { test, expect } from 'vitest';
 import * as dc from 'node:diagnostics_channel';
 import { trace } from '@opentelemetry/api';
-import type { ReadableSpan } from '@opentelemetry/sdk-trace-base';
+import type { ReadableSpan } from '@opentelemetry/sdk-trace';
 import * as wt from '../src/index.js';
 import { CONTEXT_KEY, instrumentBullMQ } from '../src/integrations/bullmq.js';
 import { instrumentPostgres, querySummary } from '../src/integrations/postgres.js';
@@ -65,16 +65,16 @@ test('bullmq: producer and consumer spans share a trace through job data', async
   const req = all.find((s) => s.name === 'request')!;
   const [send, bulk] = all.filter((s) => s.name === 'send emails');
   const [ok, failed] = all.filter((s) => s.name === 'process emails');
-  expect(send!.parentSpanId).toBe(req.spanContext().spanId);
+  expect(send!.parentSpanContext?.spanId).toBe(req.spanContext().spanId);
   expect(send!.attributes).toMatchObject({
     'messaging.system': 'bullmq', 'messaging.destination.name': 'emails', 'messaging.operation.type': 'send',
     'messaging.message.id': '1', 'messaging.bullmq.job.delay_ms': 500,
   });
   expect(bulk!.attributes['messaging.batch.message_count']).toBe(2);
   expect(ok!.spanContext().traceId).toBe(req.spanContext().traceId);
-  expect(ok!.parentSpanId).toBe(send!.spanContext().spanId);
+  expect(ok!.parentSpanContext?.spanId).toBe(send!.spanContext().spanId);
   expect(ok!.attributes).toMatchObject({ 'messaging.operation.type': 'process', 'messaging.bullmq.job.attempt': 1 });
-  expect(failed!.parentSpanId).toBe(bulk!.spanContext().spanId);
+  expect(failed!.parentSpanContext?.spanId).toBe(bulk!.spanContext().spanId);
   expect(failed!.status.code).toBe(2);
 });
 
@@ -100,7 +100,7 @@ test('postgres: postgres:query channel becomes client spans with SQLSTATE', asyn
   const job = all.find((s) => s.name === 'job')!;
   const sel = all.find((s) => s.name === 'SELECT users')!;
   const ins = all.find((s) => s.name === 'INSERT users')!;
-  expect(sel.parentSpanId).toBe(job.spanContext().spanId);
+  expect(sel.parentSpanContext?.spanId).toBe(job.spanContext().spanId);
   expect(sel.kind).toBe(2); // CLIENT
   expect(sel.attributes).toMatchObject({ 'db.system': 'postgresql', 'db.operation.name': 'SELECT', 'db.namespace': 'app', 'server.port': 5432 });
   expect(JSON.stringify(sel.attributes)).not.toContain('secret');

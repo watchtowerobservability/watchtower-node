@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.5.0
+
+- `@opentelemetry/api` is now the only hard dependency. The SDK packages (`sdk-trace`, `sdk-logs`, `sdk-metrics`, `resources`, `core`, `context-async-hooks`, `otlp-transformer` and the three OTLP/HTTP exporters) are optional peer dependencies, loaded when `init` runs; if one is missing, `init` throws an error that lists what to `npm install`. Install them next to the SDK (see the README). Same ranges as before (SDK 3.1, exporters 0.301).
+
+- OpenTelemetry moves to the current majors: API 1.10, SDK packages 3.1 (`sdk-trace`, `sdk-metrics`, `sdk-logs`, `resources`, `core`) and the 0.301 exporters, replacing the 1.30 / 0.57 stack. Node 22.15 or newer is required (the OTel 3.x packages need it). `NodeTracerProvider` is gone upstream, so `init` registers the async-hooks context manager, the W3C propagators and the tracer provider itself; `Client.provider` is now an SDK `TracerProvider` and `Client.resource` is new. A span's parent is `parentSpanContext?.spanId` (was `parentSpanId`). The optional peer `@opentelemetry/instrumentation-runtime-node` is `>=0.38`.
+
 - Datastores and queues: new subpaths `sql` (shared SQL normalizer and `db.query.hash`, same as the server), `sqlite` (node:sqlite, better-sqlite3, sqlite3, libSQL), `duckdb`, `lmdb`, `level` (LevelDB/RocksDB), `cache` (node-cache, lru-cache, Keyv hit/miss), `pools` (MongoDB, mysql2, any pool), `orm` (Drizzle, Kysely, TypeORM, Sequelize, MikroORM), `amqp` (amqplib, rabbitmq-client), `nats`, `mqtt`, `pg-boss`, `graphile-worker`. SQL spans carry an N+1 hint (`db.n_plus_one`, `db.query.repeat_count`); statement text is opt-in (`queryText` / `WATCHTOWER_DB_QUERY_TEXT=1`) and literal-free. postgres.js spans gain `db.query.hash`; `querySummary` also returns `target`.
 - Metrics: the OTel metrics SDK with a periodic OTLP reader (delta temporality by default), set as the global meter provider by `init`; runtime metrics through the optional peer `@opentelemetry/instrumentation-runtime-node`; spooled to `bufferDir/metrics`. `WATCHTOWER_LOGS` / `WATCHTOWER_METRICS` (or `logs` / `metrics` options) switch the two signals, default on.
 

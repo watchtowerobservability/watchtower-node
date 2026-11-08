@@ -1,7 +1,7 @@
 import { test, expect } from 'vitest';
 import { metrics, trace } from '@opentelemetry/api';
 import { MeterProvider, MetricReader } from '@opentelemetry/sdk-metrics';
-import type { ReadableSpan } from '@opentelemetry/sdk-trace-base';
+import type { ReadableSpan } from '@opentelemetry/sdk-trace';
 import * as wt from '../src/index.js';
 import { instrumentBetterSqlite3, instrumentLibsql, instrumentNodeSqlite, instrumentSqlite3 } from '../src/integrations/sqlite.js';
 import { instrumentDuckDB } from '../src/integrations/duckdb.js';
@@ -60,7 +60,7 @@ test('node:sqlite: statement spans with hash, N+1 hint, no values, driver error 
   const parent = all.find((s) => s.name === 'job')!;
   const sel = all.filter((s) => s.name === 'SELECT users');
   expect(sel).toHaveLength(7);
-  expect(sel[0]!.parentSpanId).toBe(parent.spanContext().spanId);
+  expect(sel[0]!.parentSpanContext?.spanId).toBe(parent.spanContext().spanId);
   expect(new Set(sel.map((s) => s.attributes['db.query.hash'])).size).toBe(1);
   expect(sel[0]!.attributes['db.query.hash']).toBe(normalizeAndHash('select * from users where id = ?')[1]);
   expect(sel[0]!.attributes).toMatchObject({ 'db.system.name': 'sqlite', 'db.operation.name': 'SELECT', 'db.collection.name': 'users' });
@@ -146,7 +146,7 @@ test('lmdb: write and transaction spans (children inside the transaction), map g
   const all = await drain();
   const tx = all.find((s) => s.name === 'transaction')!;
   const [inner, sub] = all.filter((s) => s.name.startsWith('put'));
-  expect(inner!.parentSpanId).toBe(tx.spanContext().spanId);
+  expect(inner!.parentSpanContext?.spanId).toBe(tx.spanContext().spanId);
   expect(sub!.attributes).toMatchObject({ 'db.system.name': 'lmdb', 'db.collection.name': 'users', 'db.namespace': 'data.mdb' });
   expect(await value('wt.embedded.map.used', { 'db.system.name': 'lmdb' })).toBe(40960);
   expect(await value('wt.embedded.entries', { 'db.system.name': 'lmdb' })).toBe(3);

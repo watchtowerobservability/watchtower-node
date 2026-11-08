@@ -1,15 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { createRequire } from 'node:module';
 import { isMainThread } from 'node:worker_threads';
-import { trace } from '@opentelemetry/api';
-import { InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
-import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
+import { context, trace } from '@opentelemetry/api';
+import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
+import { InMemorySpanExporter, SimpleSpanProcessor, TracerProvider } from '@opentelemetry/sdk-trace';
 import { capture, compile, createProbes, decorateExpr, paramNames, render, startProbes, tags } from '../src/probes.js';
 
 const exporter = new InMemorySpanExporter();
-const provider = new NodeTracerProvider();
-provider.addSpanProcessor(new SimpleSpanProcessor(exporter));
-provider.register();
+context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
+trace.setGlobalTracerProvider(new TracerProvider({ spanProcessors: [new SimpleSpanProcessor({ exporter })] }));
 
 describe('probes', () => {
   it('condition subset refuses calls', () => {

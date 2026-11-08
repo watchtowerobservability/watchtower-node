@@ -4,11 +4,12 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
-import type { SpanExporter, ReadableSpan } from '@opentelemetry/sdk-trace-base';
+import type { SpanExporter, ReadableSpan } from '@opentelemetry/sdk-trace';
 import type { LogRecordExporter, ReadableLogRecord } from '@opentelemetry/sdk-logs';
-import { AggregationTemporality } from '@opentelemetry/sdk-metrics';
-import type { InstrumentType, PushMetricExporter, ResourceMetrics } from '@opentelemetry/sdk-metrics';
-import { JsonLogsSerializer, JsonMetricsSerializer, JsonTraceSerializer } from '@opentelemetry/otlp-transformer';
+import type { AggregationTemporality, InstrumentType, PushMetricExporter, ResourceMetrics } from '@opentelemetry/sdk-metrics';
+import { need } from './load.js';
+
+const ser = () => need<typeof import('@opentelemetry/otlp-transformer')>('@opentelemetry/otlp-transformer');
 
 type Done = Parameters<SpanExporter['export']>[1];
 
@@ -25,9 +26,9 @@ export interface SpoolOptions<B = ReadableSpan[]> {
 }
 
 /** OTLP/JSON encoders for the three signals. */
-export const encodeSpans = (spans: ReadableSpan[]): Uint8Array => Buffer.from(JsonTraceSerializer.serializeRequest(spans)!);
-export const encodeLogs = (logs: ReadableLogRecord[]): Uint8Array => Buffer.from(JsonLogsSerializer.serializeRequest(logs)!);
-export const encodeMetrics = (rm: ResourceMetrics): Uint8Array => Buffer.from(JsonMetricsSerializer.serializeRequest(rm)!);
+export const encodeSpans = (spans: ReadableSpan[]): Uint8Array => Buffer.from(ser().JsonTraceSerializer.serializeRequest(spans)!);
+export const encodeLogs = (logs: ReadableLogRecord[]): Uint8Array => Buffer.from(ser().JsonLogsSerializer.serializeRequest(logs)!);
+export const encodeMetrics = (rm: ResourceMetrics): Uint8Array => Buffer.from(ser().JsonMetricsSerializer.serializeRequest(rm)!);
 
 export class SpoolExporter<B = ReadableSpan[]> implements BatchExporter<B> {
   private readonly maxFiles: number;
@@ -108,7 +109,7 @@ export class MetricSpool extends SpoolExporter<ResourceMetrics> implements PushM
 
   selectAggregationTemporality(t: InstrumentType): AggregationTemporality {
     const pick = this.metricInner.selectAggregationTemporality;
-    return pick ? pick.call(this.metricInner, t) : AggregationTemporality.CUMULATIVE; // the SDK default
+    return pick ? pick.call(this.metricInner, t) : 1 as AggregationTemporality; // CUMULATIVE, the SDK default (enum value, so sdk-metrics is not imported eagerly)
   }
 
   forceFlush(): Promise<void> {

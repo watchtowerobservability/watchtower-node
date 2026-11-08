@@ -7,8 +7,12 @@
 GitHub Packages needs a token with `read:packages` even for public packages:
 
 ```sh
-npm install @watchtowerobservability/node
+npm install @watchtowerobservability/node @opentelemetry/context-async-hooks @opentelemetry/core \
+  @opentelemetry/exporter-logs-otlp-http @opentelemetry/exporter-metrics-otlp-http @opentelemetry/exporter-trace-otlp-http \
+  @opentelemetry/otlp-transformer @opentelemetry/resources @opentelemetry/sdk-logs @opentelemetry/sdk-metrics @opentelemetry/sdk-trace
 ```
+
+`@opentelemetry/api` is the only hard dependency; the OpenTelemetry SDK packages above are optional peers (so your app controls their versions) and are loaded by `init`, which throws an error naming the missing ones.
 
 Or install the attested tarball from a release without a token:
 `npm install https://github.com/watchtowerobservability/watchtower-node/releases/download/v0.2.0/watchtowerobservability-node-0.2.0.tgz`.

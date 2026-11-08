@@ -2,7 +2,7 @@ import { test, expect } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { inspect } from 'node:util';
 import { trace } from '@opentelemetry/api';
-import type { ReadableSpan } from '@opentelemetry/sdk-trace-base';
+import type { ReadableSpan } from '@opentelemetry/sdk-trace';
 import * as wt from '../src/index.js';
 import { installProcessHandlers } from '../src/errors.js';
 import type { ProcessLike } from '../src/errors.js';
@@ -404,6 +404,6 @@ test('genai: llamaindex callback events and the openai agents processor', async 
   const a = named(all, 'invoke_agent triage'), g = named(all, 'chat gpt-4.1'), f = named(all, 'execute_tool refund');
   expect(a.attributes['gen_ai.agent.name']).toBe('triage');
   expect(g.attributes['gen_ai.usage.input_tokens']).toBe(10);
-  expect(g.parentSpanId ?? (g as unknown as { parentSpanContext?: { spanId: string } }).parentSpanContext?.spanId).toBe(a.spanContext().spanId);
+  expect(g.parentSpanContext?.spanId).toBe(a.spanContext().spanId);
   expect(f.status.code).toBe(2);
 });

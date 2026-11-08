@@ -2,7 +2,7 @@ import { test, expect } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { SpanExporter, ReadableSpan } from '@opentelemetry/sdk-trace-base';
+import type { SpanExporter, ReadableSpan } from '@opentelemetry/sdk-trace';
 import * as wt from '../src/index.js';
 import { SpoolExporter, spoolLogs } from '../src/buffer.js';
 import type { LogRecordExporter, ReadableLogRecord } from '@opentelemetry/sdk-logs';
@@ -85,4 +85,9 @@ test('failed log export is spooled and replayed to /v1/logs once the endpoint is
   await exp();
   expect(posted).toEqual(['http://x/v1/logs', 'http://x/v1/logs']);
   expect(fs.readdirSync(dir)).toHaveLength(0);
+});
+
+test('need() names the packages to install when an OTel SDK peer is missing', async () => {
+  const { need } = await import('../src/load.js');
+  expect(() => need('@opentelemetry/not-installed-sdk')).toThrow(/npm install .*@opentelemetry\/sdk-trace/);
 });

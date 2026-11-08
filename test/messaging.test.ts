@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { test, expect } from 'vitest';
 import { trace } from '@opentelemetry/api';
-import type { ReadableSpan } from '@opentelemetry/sdk-trace-base';
+import type { ReadableSpan } from '@opentelemetry/sdk-trace';
 import * as wt from '../src/index.js';
 import { instrumentAmqplib, instrumentRabbitmqClient } from '../src/integrations/amqp.js';
 import { instrumentNats } from '../src/integrations/nats.js';
@@ -30,8 +30,8 @@ function expectChained(all: ReadableSpan[], producer: string, consumer: string) 
   const req = all.find((s) => s.name === 'request')!;
   const p = all.find((s) => s.name === producer && s.kind === 3)!;
   const c = all.find((s) => s.name === consumer && s.kind === 4)!;
-  expect(p.parentSpanId).toBe(req.spanContext().spanId);
-  expect(c.parentSpanId).toBe(p.spanContext().spanId);
+  expect(p.parentSpanContext?.spanId).toBe(req.spanContext().spanId);
+  expect(c.parentSpanContext?.spanId).toBe(p.spanContext().spanId);
   expect(c.links[0]!.context.spanId).toBe(p.spanContext().spanId);
   return { p, c };
 }
@@ -113,7 +113,7 @@ test('nats: publish headers, callback and iterator subscriptions', async () => {
   const all = await drain();
   const [req1] = all.filter((s) => s.name === 'request');
   const pub = all.find((s) => s.name === 'send a.b')!;
-  expect(pub.parentSpanId).toBe(req1!.spanContext().spanId);
+  expect(pub.parentSpanContext?.spanId).toBe(req1!.spanContext().spanId);
   const consumers = all.filter((s) => s.name === 'process a.b');
   expect(consumers).toHaveLength(2); // callback + iterator
   for (const c of consumers) expect(c.links[0]!.context.spanId).toBe(pub.spanContext().spanId);

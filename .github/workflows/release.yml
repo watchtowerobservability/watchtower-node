@@ -28,6 +28,11 @@ jobs:
       - run: npm run build --if-present
       - run: npm run typecheck --if-present
       - run: npm test --if-present
+      - name: Refuse stage versions
+        # 0.0.0-stage was published to public npm once (B23); no 0.0.0-* build may reach the registry or a release
+        run: |
+          v="$(node -p 'require("./package.json").version')"
+          case "$v" in 0.0.0|0.0.0-*) echo "refusing to release version $v"; exit 1;; esac
       - run: npm pack --ignore-scripts
       - uses: actions/attest-build-provenance@v2
         with:

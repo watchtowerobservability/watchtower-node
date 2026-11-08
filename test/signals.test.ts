@@ -5,7 +5,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import type { SpanContext } from '@opentelemetry/api';
-import { Resource } from '@opentelemetry/resources';
+import { defaultResource } from '@opentelemetry/resources';
 import { AggregationTemporality, InstrumentType } from '@opentelemetry/sdk-metrics';
 import type { PushMetricExporter, ResourceMetrics } from '@opentelemetry/sdk-metrics';
 import * as wt from '../src/index.js';
@@ -77,7 +77,7 @@ test('failed metric export is spooled and replayed to /v1/metrics', async () => 
   const s = new MetricSpool(inner as unknown as PushMetricExporter, dir, 'http://x/v1/metrics', {}, fetch);
   // the reader sees the inner exporter's preference
   expect(s.selectAggregationTemporality(InstrumentType.COUNTER)).toBe(AggregationTemporality.DELTA);
-  const batch = { resource: Resource.default(), scopeMetrics: [] } as unknown as ResourceMetrics;
+  const batch = { resource: defaultResource(), scopeMetrics: [] } as unknown as ResourceMetrics;
   const exp = (): Promise<void> => new Promise((r) => s.export(batch, () => r()));
   await exp();
   expect(fs.readdirSync(dir)).toHaveLength(1);

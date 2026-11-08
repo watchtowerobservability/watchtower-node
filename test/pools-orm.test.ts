@@ -1,7 +1,7 @@
 import { test, expect } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { metrics, trace } from '@opentelemetry/api';
-import type { ReadableSpan } from '@opentelemetry/sdk-trace-base';
+import type { ReadableSpan } from '@opentelemetry/sdk-trace';
 import { AggregationTemporality, InMemoryMetricExporter, MeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
 import type { DataPoint, Histogram, MetricData } from '@opentelemetry/sdk-metrics';
 import * as wt from '../src/index.js';

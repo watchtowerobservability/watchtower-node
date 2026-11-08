@@ -2,7 +2,7 @@ import { test, expect, afterEach } from 'vitest';
 import { writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ReadableSpan } from '@opentelemetry/sdk-trace-base';
+import type { ReadableSpan } from '@opentelemetry/sdk-trace';
 import * as wt from '../src/index.js';
 import Vitest from '../src/vitest.js';
 import Jest from '../src/jest.js';
