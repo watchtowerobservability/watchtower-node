@@ -2,7 +2,7 @@
 // statement hash and N+1 hint, connection-pool metrics and embedded-store gauges.
 import * as fs from 'node:fs';
 import * as nodePath from 'node:path';
-import { context, createContextKey, metrics, trace, SpanKind, SpanStatusCode } from '@opentelemetry/api';
+import { context, createContextKey, INVALID_SPAN_CONTEXT, metrics, trace, SpanKind, SpanStatusCode } from '@opentelemetry/api';
 import type { Attributes, BatchObservableResult, Context, Counter, Histogram, Meter, Span, TimeInput } from '@opentelemetry/api';
 import { isPgDialect, normalizeAndHash, querySummary } from '../sql.js';
 
@@ -12,6 +12,9 @@ export interface DbOptions {
   /** Flag a statement run more than this many times under one parent span. Default:
    * `WATCHTOWER_DB_N_PLUS_ONE` or 5; 0 turns it off. */
   nPlusOne?: number;
+  /** Record a query only when a span is active (a request, job or `observe` span). Default true (`WATCHTOWER_DB_REQUIRE_PARENT=0`
+   * turns it off): startup DDL, migrations and polling loops run outside any span and would otherwise each become a root trace. */
+  requireParent?: boolean;
 }
 
 export interface DbOp {
@@ -51,6 +54,9 @@ function repeats(parent: string, key: string): number {
 
 /** A CLIENT span for `op` (not made active): summary, hash, N+1 hint. Prefer `traced`. */
 export function startDbSpan(op: DbOp, opts: DbOptions | undefined, parent: Context, startTime?: TimeInput): Span {
+  const p = trace.getSpan(parent)?.spanContext();
+  const requireParent = opts?.requireParent ?? !['0', 'false', 'off', 'no'].includes((process.env.WATCHTOWER_DB_REQUIRE_PARENT || '').trim().toLowerCase());
+  if (requireParent && !(p && trace.isSpanContextValid(p))) return trace.wrapSpanContext(INVALID_SPAN_CONTEXT); // non-recording: nothing is exported
   const attrs: Attributes = { 'db.system.name': op.system, ...op.attributes };
   let { operation, collection } = op;
   let name = [operation, collection].filter(Boolean).join(' ') || op.system;
@@ -69,7 +75,6 @@ export function startDbSpan(op: DbOp, opts: DbOptions | undefined, parent: Conte
   if (operation) attrs['db.operation.name'] = operation;
   if (collection) attrs['db.collection.name'] = collection;
   if (op.namespace) attrs['db.namespace'] = op.namespace;
-  const p = trace.getSpan(parent)?.spanContext();
   const max = threshold(opts);
   if (p && max > 0) {
     const n = repeats(p.spanId, key);

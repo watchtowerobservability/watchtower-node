@@ -7,6 +7,8 @@ import type { DataPoint, Histogram, MetricData } from '@opentelemetry/sdk-metric
 import * as wt from '../src/index.js';
 import { instrumentMongoPool, instrumentMysql2Pool } from '../src/integrations/pools.js';
 import { instrumentDrizzle, instrumentTypeORM, kyselyLog, mikroOrmLoggerFactory, sequelizeLogging } from '../src/integrations/orm.js';
+// These tests call the drivers outside any span; requireParent (default on) would drop them.
+process.env.WATCHTOWER_DB_REQUIRE_PARENT = '0';
 
 type Done = (r: { code: number }) => void;
 const spans: ReadableSpan[] = [];

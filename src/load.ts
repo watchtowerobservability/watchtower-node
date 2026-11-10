@@ -25,6 +25,7 @@ function known(id: string): unknown {
       case '@opentelemetry/instrumentation-undici': return require('@opentelemetry/instrumentation-undici');
       case '@opentelemetry/instrumentation-pg': return require('@opentelemetry/instrumentation-pg');
       case '@opentelemetry/instrumentation-ioredis': return require('@opentelemetry/instrumentation-ioredis');
+      case '@opentelemetry/instrumentation-mysql2': return require('@opentelemetry/instrumentation-mysql2');
       case 'winston-transport': return require('winston-transport');
       default: return NONE;
     }

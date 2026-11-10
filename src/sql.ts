@@ -179,12 +179,22 @@ export const isPgDialect = (system: string | undefined) =>
   system === 'postgresql' || system === 'cockroachdb' || system === 'redshift';
 
 const OP = /^\s*(?:with\b[\s\S]*?\)\s*)?([a-z]+)/i;
-const TARGET = /\b(?:from|into|update|join|table)\s+((?:"[^"]+"|[\w$]+)(?:\.(?:"[^"]+"|[\w$]+))?)/i;
+const NAME = '(?:"[^"]+"|[\\w$]+)(?:\\.(?:"[^"]+"|[\\w$]+))?';
+const TARGET = new RegExp(`\\b(?:from|into|update|join|table)\\s+(?:if\\s+(?:not\\s+)?exists\\s+)?(${NAME})`, 'i');
+// DDL: `CREATE [TEMP|VIRTUAL|UNIQUE...] TABLE|INDEX|VIEW [IF NOT EXISTS] name [ON table]`; an index is named after its table
+const CREATE = new RegExp(`^\\s*create\\s+(?:(?:temp|temporary|virtual|unique|fulltext|spatial|clustered|nonclustered|materialized|or\\s+replace)\\s+)*(table|index|view)\\s+(?:if\\s+not\\s+exists\\s+)?(?:concurrently\\s+)?(${NAME})(?:\\s+on\\s+(?:only\\s+)?(${NAME}))?`, 'i');
 
 /** `SELECT users`-style summary: the operation and first table, never values or the statement text. */
 export function querySummary(text: string | null | undefined, fallback = 'postgres'): {
   operation?: string; target?: string; summary: string;
 } {
+  const ddl = text?.match(CREATE);
+  if (ddl) {
+    const kind = ddl[1]!.toLowerCase();
+    const operation = `CREATE ${kind.toUpperCase()}`;
+    const target = (kind === 'index' ? ddl[3] ?? ddl[2]! : ddl[2]!).replace(/"/g, '');
+    return { operation, target, summary: `${operation} ${target}` };
+  }
   const operation = text?.match(OP)?.[1]?.toUpperCase();
   const target = text?.match(TARGET)?.[1]?.replace(/"/g, '');
   return { operation, target, summary: [operation ?? fallback, target].filter(Boolean).join(' ') };

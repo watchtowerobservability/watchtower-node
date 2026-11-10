@@ -1,6 +1,6 @@
 {
   "name": "@watchtowerobservability/node",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/watchtowerobservability/watchtower-node.git"
@@ -13,6 +13,9 @@
   "main": "./dist/cjs/index.js",
   "module": "./dist/esm/index.js",
   "types": "./dist/cjs/index.d.ts",
+  "bin": {
+    "wt-next-sourcemaps": "./dist/cjs/next-sourcemaps-cli.js"
+  },
   "files": [
     "dist"
   ],
@@ -381,6 +384,7 @@
     "@opentelemetry/instrumentation": ">=0.200.0",
     "@opentelemetry/instrumentation-http": ">=0.200.0",
     "@opentelemetry/instrumentation-ioredis": ">=0.50.0",
+    "@opentelemetry/instrumentation-mysql2": ">=0.40.0",
     "@opentelemetry/instrumentation-pg": ">=0.50.0",
     "@opentelemetry/instrumentation-runtime-node": ">=0.38.0",
     "@opentelemetry/instrumentation-undici": ">=0.10.0",
@@ -414,6 +418,9 @@
       "optional": true
     },
     "@opentelemetry/instrumentation-ioredis": {
+      "optional": true
+    },
+    "@opentelemetry/instrumentation-mysql2": {
       "optional": true
     },
     "@opentelemetry/instrumentation-pg": {

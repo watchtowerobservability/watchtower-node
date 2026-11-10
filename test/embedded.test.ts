@@ -9,6 +9,8 @@ import { instrumentLmdb } from '../src/integrations/lmdb.js';
 import { instrumentLevel } from '../src/integrations/level.js';
 import { instrumentKeyv, instrumentLruCache, instrumentNodeCache } from '../src/integrations/cache.js';
 import { normalizeAndHash } from '../src/sql.js';
+// These tests call the drivers outside any span; requireParent (default on) would drop them.
+process.env.WATCHTOWER_DB_REQUIRE_PARENT = '0';
 
 type Done = (r: { code: number }) => void;
 const spans: ReadableSpan[] = [];

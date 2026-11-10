@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.7.0
+
+- URL scrubbing on by default (`urlScrubbing: false` to opt out): a span processor drops the query string, removes `url.query` and replaces secret-looking path segments (>= 24 chars, or >= 10 chars with a letter and a digit; UUIDs too) with `:redacted` in `http.target`, `url.full`, `url.path`, `http.url` and URLs in span names, on every span including Next.js, http and fetch spans. `http.route` is kept. README no longer claims query strings are "never recorded" without saying how. Behaviour change: URLs that carried long ids now show `:redacted`.
+- SQL summaries: `CREATE TABLE IF NOT EXISTS forms` is `CREATE TABLE forms`, `CREATE [UNIQUE] INDEX x ON forms` is `CREATE INDEX forms` (TEMP and VIRTUAL too); `DROP TABLE IF EXISTS` no longer reports `IF`. `db.operation.name` is `CREATE TABLE` / `CREATE INDEX` for these.
+- `DbOptions.requireParent` (default true, `WATCHTOWER_DB_REQUIRE_PARENT=0` to turn off): datastore spans are recorded only under an active span, which keeps startup DDL, migrations and polling loops out. **Behaviour change** for every datastore integration and postgres.js: queries run outside any span used to become root traces and no longer do; pass `requireParent: false` to restore that.
+- Resource attributes `telemetry.sdk.name/language/version` (from the OTel SDK) and `telemetry.distro.name=watchtower`, `telemetry.distro.version`. They were never set before (a bare resource was built; nothing stripped them), so the coverage report showed no SDK.
+- `/next`: `nextInternals: 'drop' | 'sample' | 'keep'` (default `'sample'` at `nextInternalsRate` 0.1) for Next's internal spans (`next.span_type`); request, route-handler, render, server-action, fetch, SERVER/CLIENT and errored spans are kept. New `spanFilter` init option.
+- `/next`: `withWatchtower(nextConfig, { sourcemaps })` (turns on `productionBrowserSourceMaps`), `uploadSourcemaps()` and the `wt-next-sourcemaps` bin (uploads `.next/static` maps with `WT_API_KEY` (scope `ci:write`), `WT_PROJECT`, `WT_RELEASE`, then deletes them), and `tunnelHandler({ endpoint })` for a first-party `app/api/wt/[...path]/route.ts` that forwards only the browser RUM paths.
+- `instrument: 'auto'` (or `WT_INSTRUMENT=auto`): also patches postgres.js, better-sqlite3 and mysql2 (new optional peer `@opentelemetry/instrumentation-mysql2`) when installed and logs one line naming what was patched (`instrumentLog: false` / `WT_INSTRUMENT_LOG=0`).
+- `wt.checkin(monitorSlug, fn)` cron helper over `POST /v1/checkins/{slug}` (key scope `ingest:checkins`).
+- `init` now flushes on SIGTERM and SIGINT (2 s cap) and re-sends the signal when no other handler is registered. Not done before: a SIGTERM exited without flushing. Under `next start` Next's own handler still decides the exit.
+
 ## 0.6.0
 
 - Fix: the ESM build was unimportable (`dist/esm/load.js` lacked `need`). The ESM loader is now the compiled `load.ts` with a `createRequire`; `npm run smoke` packs, installs and imports both builds.

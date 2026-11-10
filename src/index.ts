@@ -4,13 +4,18 @@ import { inspect } from 'node:util';
 import { context, diag, metrics, propagation, trace } from '@opentelemetry/api';
 import type { Tracer } from '@opentelemetry/api';
 import type { DetectedResourceAttributes, Resource } from '@opentelemetry/resources';
-import type { SpanExporter, TracerProvider } from '@opentelemetry/sdk-trace';
+import type { ReadableSpan, SpanExporter, TracerProvider } from '@opentelemetry/sdk-trace';
 import type { LoggerProvider, LogRecordExporter } from '@opentelemetry/sdk-logs';
 import type { MeterProvider, PushMetricExporter } from '@opentelemetry/sdk-metrics';
 import { need as needPeer } from './load.js';
 import { otelEnv } from './env.js';
 import { instrumentAll } from './instrument.js';
 import { LOG_BODY_KEY, redactor } from './redact.js';
+import { urlScrubber } from './scrub.js';
+import { filterExporter } from './filter.js';
+import { checkin as runCheckin } from './checkin.js';
+import { installSignalFlush } from './shutdown.js';
+import { VERSION } from './version.js';
 import { SpoolExporter, spoolLogs } from './buffer.js';
 import { startMetrics, switchOn } from './metrics.js';
 import * as nodePath from 'node:path';
@@ -85,8 +90,23 @@ export interface InitOptions {
   captureRules?: boolean;
   /** Replace the span exporter (tests). */
   exporter?: unknown;
-  /** Patch node:http, fetch (undici), pg and ioredis for those whose `@opentelemetry/instrumentation-*` peer is installed; defaults to on unless WT_INSTRUMENT=0. `init` only: use the `/register` preload so it runs before the app imports them. */
-  instrument?: boolean;
+  /**
+   * Scrub URLs on every span, including spans other libraries create (Next.js, node:http, fetch): the query string is dropped
+   * (`url.query` removed) and path segments that look like secrets or ids (>= 24 chars, or >= 10 chars mixing letters and digits,
+   * UUIDs included) become `:redacted`, in `http.target`, `url.full`, `url.path`, `http.url` and URLs in span names.
+   * `http.route` is kept. Default true; `false` records URLs as the instrumentation produced them.
+   */
+  urlScrubbing?: boolean;
+  /** Return false to drop a finished span before export (the `/next` entry uses it for `nextInternals`). */
+  spanFilter?: (span: ReadableSpan) => boolean;
+  /**
+   * Patch node:http, fetch (undici), pg and ioredis for those whose `@opentelemetry/instrumentation-*` peer is installed; defaults to on unless WT_INSTRUMENT=0.
+   * `'auto'` (or WT_INSTRUMENT=auto) also instruments whichever of postgres.js, better-sqlite3 and mysql2 is installed and logs one line naming what it patched
+   * (`instrumentLog: false` or WT_INSTRUMENT_LOG=0 silences it). `init` only: use the `/register` preload so it runs before the app imports them.
+   */
+  instrument?: boolean | 'auto';
+  /** Print the one-line list of what `instrument: 'auto'` patched (default true). */
+  instrumentLog?: boolean;
   fetch?: typeof fetch;
 }
 
@@ -152,8 +172,15 @@ export class Client {
     const environment = o.environment || env.WT_ENVIRONMENT || oe.resource['deployment.environment.name'];
     const release = o.release || env.WT_RELEASE || oe.resource['service.version'];
     // the OTel SDK packages are optional peers, loaded here (not at import time) with a clear error when missing
-    const { resourceFromAttributes } = needPeer<typeof import('@opentelemetry/resources')>('@opentelemetry/resources');
+    const { resourceFromAttributes, defaultResource } = needPeer<typeof import('@opentelemetry/resources')>('@opentelemetry/resources');
+    // the SDK's own telemetry.sdk.* (name, language, version): a bare resourceFromAttributes does not add them
+    const sdk = (defaultResource().attributes ?? {}) as Record<string, unknown>;
     const resource = resourceFromAttributes({
+      'telemetry.sdk.name': String(sdk['telemetry.sdk.name'] ?? 'opentelemetry'),
+      'telemetry.sdk.language': String(sdk['telemetry.sdk.language'] ?? 'nodejs'),
+      'telemetry.sdk.version': String(sdk['telemetry.sdk.version'] ?? 'unknown'),
+      'telemetry.distro.name': 'watchtower',
+      'telemetry.distro.version': VERSION,
       ...(safeResource(oe.resource) as DetectedResourceAttributes),
       'service.name': o.serviceName || env.WT_SERVICE || oe.serviceName || 'app',
       ...(environment ? { 'deployment.environment.name': environment } : {}),
@@ -171,7 +198,8 @@ export class Client {
       // spans and log records spool to their own subdirectories
       if (o.bufferDir) exporter = new SpoolExporter(exporter, nodePath.join(o.bufferDir, 'traces'), url, this.headers, this.fetch);
     }
-    // the redactor runs first, so the batch processor exports redacted attributes
+    if (o.spanFilter) exporter = filterExporter(exporter, o.spanFilter);
+    // the scrubber and redactor run first, so the batch processor exports scrubbed attributes (the user's `redact` sees scrubbed URLs)
     const { BatchSpanProcessor, TracerProvider: TP } = needPeer<typeof import('@opentelemetry/sdk-trace')>('@opentelemetry/sdk-trace');
     let sampler: unknown;
     if (o.remoteSampling ?? env.WT_REMOTE_SAMPLING === '1') {
@@ -187,6 +215,7 @@ export class Client {
       ...(sampler ? { sampler: sampler as never } : {}),
       spanProcessors: [
         ...(o.codeOrigin ?? env.WT_CODE_ORIGIN === '1' ? [codeOrigin()] : []),
+        ...(o.urlScrubbing ?? true ? [urlScrubber()] : []),
         ...(o.redact ? [redactor(o.redact)] : []),
         new BatchSpanProcessor({ exporter }),
       ],
@@ -232,6 +261,11 @@ export class Client {
       body,
       attributes: attrs as LogAttrs,
     });
+  }
+
+  /** Run `fn` as a cron / scheduler job with check-ins to the monitor `monitorSlug` (needs the `ingest:checkins` key scope): `in_progress`, then `ok` or `error` with the duration. */
+  checkin<T>(monitorSlug: string, fn: () => T | Promise<T>): Promise<T> {
+    return runCheckin(this, monitorSlug, fn);
   }
 
   forceFlush(): Promise<unknown> {
@@ -367,8 +401,13 @@ export function init(opts: InitOptions): Client {
   const c = new Client(opts);
   state.current = c;
   registerGlobals(c);
-  if (opts?.instrument ?? !['0', 'off', 'false', 'no'].includes((process.env.WT_INSTRUMENT || '').trim().toLowerCase())) {
-    instrumentAll({ tracerProvider: c.provider, meterProvider: c.meterProvider }, [c.endpoint, c.apiUrl]);
+  const env = (process.env.WT_INSTRUMENT || '').trim().toLowerCase();
+  const mode = opts?.instrument ?? (env === 'auto' ? 'auto' : !['0', 'off', 'false', 'no'].includes(env));
+  if (mode) {
+    const names = instrumentAll({ tracerProvider: c.provider, meterProvider: c.meterProvider }, [c.endpoint, c.apiUrl], mode === 'auto');
+    if (mode === 'auto' && (opts?.instrumentLog ?? !['0', 'off', 'false', 'no'].includes((process.env.WT_INSTRUMENT_LOG || '').trim().toLowerCase()))) {
+      console.info(`[watchtower] instrumented: ${names.map((n) => n.replace('@opentelemetry/instrumentation-', '')).join(', ') || 'nothing (no supported package found)'}`);
+    }
   }
   if (process.env.WT_PROFILING === '1') {
     const attrs = c.resource.attributes;
@@ -380,7 +419,9 @@ export function init(opts: InitOptions): Client {
     }).catch(() => undefined); // best effort: never break init
   }
   if ((opts || {}).captureProcessErrors !== false) {
-    c.uninstall = installProcessHandlers(() => c.forceFlush());
+    const offErrors = installProcessHandlers(() => c.forceFlush());
+    const offSignals = installSignalFlush(() => c.forceFlush());
+    c.uninstall = () => { offErrors(); offSignals(); };
   }
   return c;
 }
@@ -389,6 +430,7 @@ function need(): Client {
   return state.current;
 }
 
+export const checkin = <T>(slug: string, fn: () => T | Promise<T>): Promise<T> => need().checkin(slug, fn);
 export const flush = (): Promise<unknown> => (state.current ? state.current.forceFlush() : Promise.resolve());
 export const log = (l: LogLevel, b: string, a?: Record<string, unknown>): void => need().log(l, b, a);
 export const getPrompt = (id: string): Promise<unknown> => need().getPrompt(id);

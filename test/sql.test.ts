@@ -36,3 +36,14 @@ test('summary comes from normalised text and carries no values', () => {
   expect(querySummary(n, 'sqlite')).toEqual({ operation: 'SELECT', target: 'users', summary: 'SELECT users' });
   expect(querySummary(null, 'sqlite').summary).toBe('sqlite');
 });
+
+test('DDL summaries name the table, not IF or the index', () => {
+  const s = (q: string) => querySummary(normalizeSql(q), 'sqlite').summary;
+  expect(s('CREATE TABLE IF NOT EXISTS forms (id integer)')).toBe('CREATE TABLE forms');
+  expect(s('CREATE TEMP TABLE forms (id integer)')).toBe('CREATE TABLE forms');
+  expect(s('CREATE VIRTUAL TABLE IF NOT EXISTS forms_fts USING fts5(a)')).toBe('CREATE TABLE forms_fts');
+  expect(s('CREATE UNIQUE INDEX x ON forms (a)')).toBe('CREATE INDEX forms');
+  expect(s('CREATE INDEX IF NOT EXISTS x ON forms (a)')).toBe('CREATE INDEX forms');
+  expect(s('DROP TABLE IF EXISTS forms')).toBe('DROP forms');
+  expect(s('SELECT * FROM forms')).toBe('SELECT forms');
+});
