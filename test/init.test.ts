@@ -91,3 +91,10 @@ test('need() names the packages to install when an OTel SDK peer is missing', as
   const { need } = await import('../src/load.js');
   expect(() => need('@opentelemetry/not-installed-sdk')).toThrow(/npm install .*@opentelemetry\/sdk-trace/);
 });
+
+test('callerOf reads the caller frame of log()', () => {
+  const stack = 'Error\n    at Client.log (/lib/index.js:216:30)\n    at handler (/srv/app/src/cart.js:42:7)\n    at x (/y.js:1:1)';
+  expect(wt.callerOf(stack)).toStrictEqual({ 'code.filepath': '/srv/app/src/cart.js', 'code.lineno': 42 });
+  expect(wt.callerOf('Error\n    at Client.log (/a:1:1)\n    at /srv/b.js:9:3')).toStrictEqual({ 'code.filepath': '/srv/b.js', 'code.lineno': 9 });
+  expect(wt.callerOf(undefined)).toStrictEqual({});
+});

@@ -22,3 +22,5 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - run: npm test
+      - name: Pack, install the tarball into a clean project, import it (ESM + CJS)
+        run: npm run smoke

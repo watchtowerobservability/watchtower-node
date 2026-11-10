@@ -7,6 +7,31 @@ export interface CaptureContext {
   /** false for crashes (uncaught); default true. Keys starting with `wt.` are dropped. */
   handled?: boolean;
   attributes?: Record<string, string | number | boolean | undefined>;
+  /**
+   * Exception replay: variables to show on the throwing frame. Node cannot read another frame's locals, so
+   * the caller names them. Secret-looking names are masked, values are shortened; the project must also turn
+   * on "exception replay" in its issue settings or the server drops them.
+   */
+  locals?: Record<string, unknown>;
+}
+
+const SENSITIVE = /pass|secret|token|api[-_]?key|auth|cookie|session|credit|card|ssn|private|bearer/i;
+
+/** `exception.locals` for the innermost stack frame of `e`: the function and line come from its stack, the values from `locals`. */
+export function localsAttribute(e: Error, locals: Record<string, unknown>): string | undefined {
+  const m = /^\s+at (?:(\S+) \()?(.*?):(\d+):\d+\)?$/m.exec(e.stack || '');
+  const vars: Record<string, string> = {};
+  for (const [k, v] of Object.entries(locals).slice(0, 20)) {
+    let text: string;
+    try {
+      text = typeof v === 'string' ? v : JSON.stringify(v) ?? String(v);
+    } catch {
+      text = '<unrepresentable>';
+    }
+    vars[k] = SENSITIVE.test(k) ? '[Filtered]' : text.slice(0, 120);
+  }
+  if (!Object.keys(vars).length) return undefined;
+  return JSON.stringify([{ function: m?.[1] ?? '', filename: m?.[2] ?? '', lineno: m ? Number(m[3]) : undefined, vars }]);
 }
 
 /** The slice of `process` the hooks need; tests pass an EventEmitter. */
@@ -31,7 +56,9 @@ export function captureException(err: unknown, ctx?: CaptureContext): string {
   const active = trace.getActiveSpan();
   const span = active && active.isRecording() ? active : trace.getTracer('watchtower').startSpan('exception');
   span.setAttributes(attrs);
+  const replay = o.locals ? localsAttribute(e, o.locals) : undefined;
   span.recordException(e);
+  if (replay) span.setAttribute('exception.locals', replay); // the OTel JS exception event takes no attributes
   span.setStatus({ code: SpanStatusCode.ERROR, message: e.message });
   const traceId = span.spanContext().traceId;
   if (span !== active) span.end();

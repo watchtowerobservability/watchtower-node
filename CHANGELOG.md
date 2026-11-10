@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.6.0
+
+- Fix: the ESM build was unimportable (`dist/esm/load.js` lacked `need`). The ESM loader is now the compiled `load.ts` with a `createRequire`; `npm run smoke` packs, installs and imports both builds.
+- Bundling: OpenTelemetry peers are required by literal name inside try blocks, so webpack, esbuild and Next's file tracer can follow them. README has a Next.js recipe.
+- `redact` now also runs on span names (`span.name`), status messages (`status.message`), every span event's and link's attributes (including `exception.message` / `exception.stacktrace`) and log bodies (`log.body`). `@watchtowerobservability/node/next` exports `makeRegister(options)`; `register` is unchanged.
+- `init` no longer disables the OpenTelemetry globals: it registers only those not yet set (a warning says when one was kept) and tears down only what an earlier `init` installed.
+- Passing `exporter` no longer turns off the default log and metric exporters (use `logs: false` / `metrics: false`); an explicit `logExporter` / `metricExporter` turns its signal on and logs always go through a batch processor.
+- Auto-instrumentation: `instrument` option (default on) for installed `@opentelemetry/instrumentation-{http,undici,pg,ioredis}` optional peers, and a `@watchtowerobservability/node/register` preload entry.
+- `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES` are read after the `WT_*` variables; `service.version` from `OTEL_RESOURCE_ATTRIBUTES` is the release.
+- README: npm install instructions (no token, no tarball).
+
 ## 0.5.0
 
 - `@opentelemetry/api` is now the only hard dependency. The SDK packages (`sdk-trace`, `sdk-logs`, `sdk-metrics`, `resources`, `core`, `context-async-hooks`, `otlp-transformer` and the three OTLP/HTTP exporters) are optional peer dependencies, loaded when `init` runs; if one is missing, `init` throws an error that lists what to `npm install`. Install them next to the SDK (see the README). Same ranges as before (SDK 3.1, exporters 0.301).

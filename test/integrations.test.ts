@@ -18,6 +18,7 @@ import { wrapHandler } from '../src/integrations/lambda.js';
 import { faasTrigger, wrapFunction } from '../src/integrations/azure-functions.js';
 import { instrumentOpenAI, instrumentAnthropic, instrumentBedrock, instrumentGoogleGenAI, vercelAiTelemetry } from '../src/integrations/genai.js';
 import { instrumentLlamaIndex, instrumentMistral, instrumentOllama, instrumentOpenAIAgents } from '../src/integrations/genai.js';
+import { instrumentMastra, instrumentVercelAI, langchainCallbackHandler } from '../src/integrations/genai-frameworks.js';
 import { pinoStream, watchtowerTransport } from '../src/integrations/logs.js';
 
 type Done = (r: { code: number }) => void;
@@ -406,4 +407,60 @@ test('genai: llamaindex callback events and the openai agents processor', async 
   expect(g.attributes['gen_ai.usage.input_tokens']).toBe(10);
   expect(g.parentSpanContext?.spanId).toBe(a.spanContext().spanId);
   expect(f.status.code).toBe(2);
+});
+
+test('LangGraph.js: graph and nodes are invoke_agent spans, tools and models nest, plain chains get none', async () => {
+  const h = langchainCallbackHandler() as Record<string, (...a: unknown[]) => void>;
+  h.handleChainStart!({}, {}, 'g', undefined, [], { langgraph_step: 0 }, 'chain', 'LangGraph');
+  h.handleChainStart!({}, {}, 'lcel', 'g', [], {}, 'chain', 'RunnableSequence');
+  h.handleChainStart!({}, {}, 'n', 'lcel', [], { langgraph_node: 'agent' }, 'chain', 'agent');
+  h.handleChatModelStart!({}, [], 'm', 'n', { invocation_params: { model: 'gpt-4o' } });
+  h.handleLLMEnd!({ llmOutput: { tokenUsage: { promptTokens: 7, completionTokens: 3 } }, generations: [[{ message: { response_metadata: { finish_reason: 'stop' } } }]] }, 'm');
+  h.handleToolStart!({ name: 'search' }, 'q', 't', 'n', [], {}, 'search');
+  h.handleToolError!(new Error('boom'), 't');
+  h.handleChainEnd!({}, 'n');
+  h.handleChainEnd!({}, 'lcel');
+  h.handleChainEnd!({}, 'g');
+  const all = await drain();
+  const g = named(all, 'invoke_agent LangGraph'), n = named(all, 'invoke_agent agent'), m = named(all, 'chat gpt-4o'), t = named(all, 'execute_tool search');
+  expect(all.some((x) => x.name.includes('RunnableSequence'))).toBe(false);
+  expect(n.parentSpanContext?.spanId).toBe(g.spanContext().spanId);
+  expect(m.parentSpanContext?.spanId).toBe(n.spanContext().spanId);
+  expect([m.attributes['gen_ai.usage.input_tokens'], m.attributes['gen_ai.usage.output_tokens']]).toStrictEqual([7, 3]);
+  expect(t.status.code).toBe(2);
+  expect(g.attributes['gen_ai.system']).toBe('langgraph');
+});
+
+test('Vercel AI SDK loop: one agent span, a chat span per step, tool executes traced, caller callbacks kept', async () => {
+  let seen = 0;
+  const { generateText } = instrumentVercelAI({
+    generateText: async (o: unknown) => {
+      const opts = o as { tools: Record<string, { execute: (a: unknown) => Promise<unknown> }>; onStepFinish: (e: unknown) => void };
+      await opts.tools.weather!.execute({ city: 'x' });
+      opts.onStepFinish({ usage: { inputTokens: 11, outputTokens: 4 }, finishReason: 'tool-calls', response: { modelId: 'gpt-4.1' } });
+      opts.onStepFinish({ usage: { promptTokens: 20, completionTokens: 6 }, finishReason: 'stop', response: { modelId: 'gpt-4.1' } });
+      return { text: 'ok' };
+    },
+  }, 'support');
+  await generateText({ tools: { weather: { execute: async () => 'sunny' } }, onStepFinish: () => { seen++; } });
+  const all = await drain();
+  const a = named(all, 'invoke_agent support');
+  const steps = all.filter((x) => x.name === 'chat gpt-4.1');
+  expect(steps.length).toBe(2);
+  expect(steps[0]!.attributes['gen_ai.usage.input_tokens']).toBe(11);
+  expect(steps[1]!.attributes['gen_ai.usage.output_tokens']).toBe(6);
+  expect(steps.every((x) => x.parentSpanContext?.spanId === a.spanContext().spanId)).toBe(true);
+  expect(named(all, 'execute_tool weather').parentSpanContext?.spanId).toBe(a.spanContext().spanId);
+  expect(seen).toBe(2);
+});
+
+test('Vercel AI SDK stream ends the run in onFinish; Mastra generate is named after the agent and errors are recorded', async () => {
+  const { streamText } = instrumentVercelAI({ streamText: (o: unknown) => { (o as { onFinish: () => void }).onFinish(); return {}; } });
+  streamText({});
+  const agent = instrumentMastra({ name: 'planner', generate: async (_m?: unknown, _o?: unknown): Promise<never> => { throw new Error('model down'); } });
+  await expect(agent.generate('hi', {})).rejects.toThrow('model down');
+  const all = await drain();
+  expect(named(all, 'invoke_agent agent').status.code).toBe(0);
+  const p = named(all, 'invoke_agent planner');
+  expect([p.attributes['gen_ai.system'], p.status.code]).toStrictEqual(['mastra', 2]);
 });

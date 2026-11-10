@@ -1,12 +1,18 @@
 // instrumentation.js:  module.exports = require('@watchtowerobservability/node/next');
+//   or, with options: export const register = makeRegister({ redact });  export { onRequestError } from '@watchtowerobservability/node/next';
 import * as wt from '../index.js';
 
-/** Next.js instrumentation hook: init from WT_* env on the Node.js runtime; no-op without WT_INGEST_KEY. */
-export async function register(): Promise<void> {
-  const rt = process.env.NEXT_RUNTIME;
-  if ((rt && rt !== 'nodejs') || !process.env.WT_INGEST_KEY) return;
-  wt.init({});
+/** Build a Next.js instrumentation `register` that passes `options` to `init`; no-op off the Node.js runtime or without a key. */
+export function makeRegister(options: wt.InitOptions = {}): () => Promise<void> {
+  return async function register(): Promise<void> {
+    const rt = process.env.NEXT_RUNTIME;
+    if ((rt && rt !== 'nodejs') || !(options.apiKey || process.env.WT_INGEST_KEY)) return;
+    wt.init(options);
+  };
 }
+
+/** Next.js instrumentation hook: init from WT_* env on the Node.js runtime; no-op without WT_INGEST_KEY. */
+export const register = makeRegister();
 
 /** Next.js onRequestError: server render, route handler and server action errors. */
 export async function onRequestError(

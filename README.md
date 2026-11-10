@@ -4,7 +4,7 @@
 
 ## Install
 
-GitHub Packages needs a token with `read:packages` even for public packages:
+Published on npm:
 
 ```sh
 npm install @watchtowerobservability/node @opentelemetry/context-async-hooks @opentelemetry/core \
@@ -14,8 +14,8 @@ npm install @watchtowerobservability/node @opentelemetry/context-async-hooks @op
 
 `@opentelemetry/api` is the only hard dependency; the OpenTelemetry SDK packages above are optional peers (so your app controls their versions) and are loaded by `init`, which throws an error naming the missing ones.
 
-Or install the attested tarball from a release without a token:
-`npm install https://github.com/watchtowerobservability/watchtower-node/releases/download/v0.2.0/watchtowerobservability-node-0.2.0.tgz`.
+Optional auto-instrumentation peers (installed ones are used, see below):
+`npm install @opentelemetry/instrumentation @opentelemetry/instrumentation-http @opentelemetry/instrumentation-undici @opentelemetry/instrumentation-pg @opentelemetry/instrumentation-ioredis`.
 
 Written in TypeScript and shipped as both ESM and CommonJS (`import` and `require` both work); the `.d.ts`
 typings are generated from the source. A thin layer over the OpenTelemetry Node SDK (ruling L1): `Authorization: Bearer` header, endpoint default (`WT_OTLP_ENDPOINT`), disk offline buffer,
@@ -38,6 +38,32 @@ wt.log('info', 'started', { port: 3000 });     // OTLP log, linked to the active
 `init` hooks `uncaughtException` and `unhandledRejection` (pass `captureProcessErrors: false` to opt out). It
 flushes and exits with code 1 like Node does, only when no other handler is registered.
 Request bodies, headers, query strings and query arguments are never recorded.
+
+## Auto-instrumentation and preload
+
+`init` patches `node:http`, `fetch` (undici), `pg` and `ioredis` for each `@opentelemetry/instrumentation-*` package you have installed (the list above); pass `instrument: false` or set `WT_INSTRUMENT=0` to skip. Patching only reaches modules loaded after it runs, so load the SDK first:
+
+```sh
+node --require @watchtowerobservability/node/register app.js     # CommonJS app (also: node -r ...)
+node --import @watchtowerobservability/node/register app.mjs     # ESM app
+```
+
+`register` calls `init({})` when `WT_INGEST_KEY` is set. For an ESM app it also registers OpenTelemetry's ESM loader hook (`@opentelemetry/instrumentation/hook.mjs`, resolved from your project, so install `@opentelemetry/instrumentation`) so `node:http` and other ES-module imports get patched; no extra flag is needed. The CommonJS and ESM copies of this package share one client (kept on `globalThis`), so `flush()` and `shutdown()` work from either. Start a CommonJS app with `--require` and an ES-module app with `--import`.
+
+`init` registers the global tracer provider, context manager, propagator and meter provider only when none is registered yet (OpenTelemetry allows each once): call `init` before other OTel setup. It no longer disables globals set earlier; a warning (via the OTel `diag` logger) says when one was kept. A second `init` replaces only what the first one installed.
+
+## Next.js
+
+```ts
+// instrumentation.ts
+import { makeRegister } from '@watchtowerobservability/node/next';
+export const register = makeRegister({ redact: (k, v) => v });   // any InitOptions; plain `register` takes env only
+export { onRequestError } from '@watchtowerobservability/node/next';
+```
+
+Install the OpenTelemetry peers above in the app itself (with pnpm, as direct dependencies, so Next's standalone tracer copies them). The SDK requires each peer by its literal name, so webpack and Next's file tracer can follow them; if the SDK arrives through a transpiled workspace package, add it to `transpilePackages`. Add `outputFileTracingIncludes` for the peers only if the standalone build still reports a missing `@opentelemetry/*` package.
+
+Bundling with esbuild or webpack (ESM or CommonJS output) works: both the CommonJS and ESM builds name every optional peer with a literal `require`/`import()` inside try, so the bundler follows the peers you have installed and skips the rest.
 
 ## Integrations
 
@@ -86,7 +112,10 @@ Each lives at its own subpath, so nothing is loaded that you do not import.
 | Mistral, Ollama | `.../genai` | `instrumentMistral(new Mistral())`, `instrumentOllama(ollama)` |
 | LlamaIndex.TS | `.../genai` | `instrumentLlamaIndex(Settings)` |
 | OpenAI Agents SDK | `.../genai` | `instrumentOpenAIAgents(addTraceProcessor)` |
-| Vercel AI SDK | `.../genai` | `generateText({ experimental_telemetry: vercelAiTelemetry() })` |
+| LangChain.js / LangGraph.js | `.../genai` | `graph.invoke(x, { callbacks: [langchainCallbackHandler()] })` |
+| Vercel AI SDK agent loop | `.../genai` | `const { generateText } = instrumentVercelAI({ generateText })` |
+| Mastra | `.../genai` | `instrumentMastra(agent)` |
+| Vercel AI SDK (telemetry only) | `.../genai` | `generateText({ experimental_telemetry: vercelAiTelemetry() })` |
 
 GenAI spans follow the OTel GenAI semantic conventions (model, token usage, finish reasons); prompt and
 completion text is not recorded. Streaming calls end their span at creation, without token usage.
@@ -269,14 +298,16 @@ See `docs/product/security/app-api-protection.md`.
 | Option | Env var | Default |
 | --- | --- | --- |
 | `apiKey` | `WT_INGEST_KEY` | required, sent as `Authorization: Bearer`, masked in output |
-| `endpoint` | `WT_OTLP_ENDPOINT` | `http://localhost:4318` |
-| `serviceName` | `WT_SERVICE` | `app` |
+| `endpoint` | `WT_OTLP_ENDPOINT`, then `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4318` |
+| `serviceName` | `WT_SERVICE`, then `OTEL_SERVICE_NAME` | `app` |
 | `environment` | `WT_ENVIRONMENT` | unset |
-| `release` | `WT_RELEASE` | unset |
+| `release` | `WT_RELEASE`, then `service.version` in `OTEL_RESOURCE_ATTRIBUTES` | unset; sent as `service.version`, and an issue's first release is linked when a release with that version exists in the project |
+| `resource` | `OTEL_RESOURCE_ATTRIBUTES` | none; `OTEL_EXPORTER_OTLP_HEADERS` adds extra headers, and its `Authorization=Bearer <key>` is used when `WT_INGEST_KEY` is unset |
+| `instrument` | `WT_INSTRUMENT` | `on` for installed http / undici / pg / ioredis instrumentations |
 | `bufferDir` | | no offline buffer (spans, logs and metrics spool to `traces/`, `logs/` and `metrics/`, 500 batches each) |
 | `logs` | `WATCHTOWER_LOGS` (`OTEL_LOGS_EXPORTER=none` also turns it off) | `on`: OTLP logs (`log()`, pino, winston) |
 | `metrics` | `WATCHTOWER_METRICS` (`OTEL_METRICS_EXPORTER=none` also turns it off) | `on`: OTLP metrics, see below |
-| `redact` | | none; called for every span and log attribute |
+| `redact` | | none; called for every span and log attribute, every span event's attributes (`exception.message`, `exception.stacktrace`), the span name (key `span.name`), the status message (`status.message`) and log bodies (`log.body`) |
 
 Metrics: `init` sets the global meter provider, so `metrics.getMeter('app')` (re-exported from
 `@opentelemetry/api`) records to Watchtower. A periodic reader exports to `/v1/metrics` every

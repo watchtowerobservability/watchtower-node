@@ -1,5 +1,6 @@
 // GenAI spans (OTel GenAI semconv) for the openai, anthropic, AWS Bedrock, Google GenAI, Mistral and Ollama SDKs (and
-// LiteLLM through its OpenAI-compatible proxy), LlamaIndex and the OpenAI Agents SDK (genai-agents.ts), and a
+// LiteLLM through its OpenAI-compatible proxy), LlamaIndex and the OpenAI Agents SDK (genai-agents.ts), LangGraph.js,
+// Mastra and the Vercel AI SDK agent loop (genai-frameworks.ts), and a
 // telemetry option for the Vercel AI SDK. Streams record time to first chunk, usage and tool calls (genai-stream.ts).
 // Prompt and completion text is never recorded.
 import { context, SpanKind, SpanStatusCode, trace } from '@opentelemetry/api';
@@ -7,6 +8,7 @@ import type { Span } from '@opentelemetry/api';
 import { applyExtract, extract, tapStream } from './genai-stream.js';
 
 export { instrumentLlamaIndex, instrumentOpenAIAgents } from './genai-agents.js';
+export { instrumentMastra, instrumentVercelAI, langchainCallbackHandler } from './genai-frameworks.js';
 
 const DONE = Symbol('wt.instrumented');
 

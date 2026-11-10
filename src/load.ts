@@ -1,10 +1,42 @@
-// Optional-peer loader (winston-transport). This is the CommonJS form; scripts/build.mjs swaps in an ESM twin
-// (createRequire(import.meta.url)) for dist/esm. The cwd fallback only matters when neither exists (test runners).
+// Optional-peer loader. Each peer is required by a LITERAL name inside a try block so bundlers (webpack, esbuild, Next's
+// file tracer) can follow it; a computed `require(name)` is invisible to them. This is the CommonJS form;
+// scripts/build.mjs prepends `const require = createRequire(import.meta.url)` for dist/esm (webpack follows that too).
+// The cwd fallback only matters when `require` does not exist (test runners running the TS source as ESM).
 import { createRequire } from 'node:module';
 
+const NONE = Symbol('not a known peer');
+
+function known(id: string): unknown {
+  try { // bundlers only tolerate an optional require that is lexically inside try
+    switch (id) {
+      case '@opentelemetry/context-async-hooks': return require('@opentelemetry/context-async-hooks');
+      case '@opentelemetry/core': return require('@opentelemetry/core');
+      case '@opentelemetry/exporter-logs-otlp-http': return require('@opentelemetry/exporter-logs-otlp-http');
+      case '@opentelemetry/exporter-metrics-otlp-http': return require('@opentelemetry/exporter-metrics-otlp-http');
+      case '@opentelemetry/exporter-trace-otlp-http': return require('@opentelemetry/exporter-trace-otlp-http');
+      case '@opentelemetry/otlp-transformer': return require('@opentelemetry/otlp-transformer');
+      case '@opentelemetry/resources': return require('@opentelemetry/resources');
+      case '@opentelemetry/sdk-logs': return require('@opentelemetry/sdk-logs');
+      case '@opentelemetry/sdk-metrics': return require('@opentelemetry/sdk-metrics');
+      case '@opentelemetry/sdk-trace': return require('@opentelemetry/sdk-trace');
+      case '@opentelemetry/instrumentation-runtime-node': return require('@opentelemetry/instrumentation-runtime-node');
+      case '@opentelemetry/instrumentation': return require('@opentelemetry/instrumentation');
+      case '@opentelemetry/instrumentation-http': return require('@opentelemetry/instrumentation-http');
+      case '@opentelemetry/instrumentation-undici': return require('@opentelemetry/instrumentation-undici');
+      case '@opentelemetry/instrumentation-pg': return require('@opentelemetry/instrumentation-pg');
+      case '@opentelemetry/instrumentation-ioredis': return require('@opentelemetry/instrumentation-ioredis');
+      case 'winston-transport': return require('winston-transport');
+      default: return NONE;
+    }
+  } catch (e) {
+    throw e;
+  }
+}
+
 export function load(id: string): unknown {
-  if (typeof require === 'function') return require(id);
-  return createRequire(`${process.cwd()}/`)(id);
+  if (typeof require !== 'function') return createRequire(`${process.cwd()}/`)(id);
+  const m = known(id);
+  return m === NONE ? require(id) : m;
 }
 
 const SDK_PEERS = [

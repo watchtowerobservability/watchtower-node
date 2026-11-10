@@ -7,13 +7,13 @@ import type { Attributes, Span } from '@opentelemetry/api';
 import { applyExtract, extract } from './genai-stream.js';
 
 type Obj = Record<string, unknown>;
-const obj = (v: unknown): Obj => (v && typeof v === 'object' ? (v as Obj) : {});
-const s = (v: unknown): string => (typeof v === 'string' ? v : '');
+export const obj = (v: unknown): Obj => (v && typeof v === 'object' ? (v as Obj) : {});
+export const s = (v: unknown): string => (typeof v === 'string' ? v : '');
 
-function start(name: string, attrs: Attributes, parent?: Span): Span {
+export function start(name: string, attrs: Attributes, parent?: Span, startTime?: number): Span {
   const ctx = parent ? trace.setSpan(context.active(), parent) : context.active();
   const clean = Object.fromEntries(Object.entries(attrs).filter(([, v]) => v !== undefined && v !== ''));
-  return trace.getTracer('watchtower').startSpan(name, { kind: SpanKind.INTERNAL, attributes: clean }, ctx);
+  return trace.getTracer('watchtower').startSpan(name, { kind: SpanKind.INTERNAL, attributes: clean, ...(startTime !== undefined ? { startTime } : {}) }, ctx);
 }
 
 /** The part of LlamaIndex.TS `Settings.callbackManager` used here. */

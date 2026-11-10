@@ -1,13 +1,16 @@
 // Thin Watchtower layer over the OpenTelemetry Node SDK: key header, endpoint default,
 // offline buffer, wt.*-safe resource attributes, redaction hook, getPrompt/score/evaluate/observe.
 import { inspect } from 'node:util';
-import { context, metrics, propagation, trace } from '@opentelemetry/api';
-import type { AttributeValue, Tracer } from '@opentelemetry/api';
+import { context, diag, metrics, propagation, trace } from '@opentelemetry/api';
+import type { Tracer } from '@opentelemetry/api';
 import type { DetectedResourceAttributes, Resource } from '@opentelemetry/resources';
-import type { SpanExporter, SpanProcessor, TracerProvider } from '@opentelemetry/sdk-trace';
+import type { SpanExporter, TracerProvider } from '@opentelemetry/sdk-trace';
 import type { LoggerProvider, LogRecordExporter } from '@opentelemetry/sdk-logs';
 import type { MeterProvider, PushMetricExporter } from '@opentelemetry/sdk-metrics';
 import { need as needPeer } from './load.js';
+import { otelEnv } from './env.js';
+import { instrumentAll } from './instrument.js';
+import { LOG_BODY_KEY, redactor } from './redact.js';
 import { SpoolExporter, spoolLogs } from './buffer.js';
 import { startMetrics, switchOn } from './metrics.js';
 import * as nodePath from 'node:path';
@@ -15,6 +18,8 @@ import { captureException, installProcessHandlers, dropReserved } from './errors
 import type { CaptureContext } from './errors.js';
 import { loadCaptureRules } from './payload.js';
 import { startProfiling } from './profiling.js';
+import { RemoteSampler } from './sampling.js';
+import { codeOrigin } from './origin.js';
 import type { Profiler } from './profiling.js';
 
 export { captureException, metrics, trace };
@@ -25,43 +30,63 @@ export type { CaptureContext };
 export const DEFAULT_ENDPOINT = 'http://localhost:4318';
 
 export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
+/** code.filepath/code.lineno of the frame that called `log()` (stack line 0 is "Error", 1 is `log`, 2 the caller). */
+export function callerOf(stack: string | undefined): Record<string, string | number> {
+  const m = /\(?((?:file:\/\/)?[^()\s]+):(\d+):\d+\)?$/.exec((stack ?? '').split('\n')[2] ?? '');
+  return m ? { 'code.filepath': m[1]!.replace(/^file:\/\//, ''), 'code.lineno': Number(m[2]) } : {};
+}
+
 const SEVERITY: Record<LogLevel, number> = { trace: 1, debug: 5, info: 9, warn: 13, error: 17, fatal: 21 };
 type LogAttrs = Parameters<ReturnType<LoggerProvider['getLogger']>['emit']>[0]['attributes'];
 
 export interface InitOptions {
-  /** Ingest key; defaults to WT_INGEST_KEY. */
+  /** Ingest key; defaults to WT_INGEST_KEY, then a `Bearer` Authorization in OTEL_EXPORTER_OTLP_HEADERS. */
   apiKey?: string;
   /** Defaults to WT_ENVIRONMENT. */
   environment?: string;
-  /** Defaults to WT_RELEASE. */
+  /** Sent as `service.version`; the server links an issue's first release by matching it to an existing release's version. Defaults to WT_RELEASE, then `service.version` in OTEL_RESOURCE_ATTRIBUTES. */
   release?: string;
   /** Hook uncaughtException / unhandledRejection (default true). */
   captureProcessErrors?: boolean;
-  /** Replace the log exporter (tests). */
+  /** Replace the log exporter (tests); setting it turns logs on unless `logs` is false. Exported through a batch processor. */
   logExporter?: unknown;
   /** Export OTLP logs; defaults to WATCHTOWER_LOGS (on unless `off`; OTEL_LOGS_EXPORTER=none also turns it off). */
   logs?: boolean;
+  /** Stamp code.filepath/code.lineno of the `log()` caller (reads the stack); defaults to WATCHTOWER_LOG_CALLER=1. */
+  logCaller?: boolean;
   /** Export OTLP metrics; defaults to WATCHTOWER_METRICS (on unless `off`; OTEL_METRICS_EXPORTER=none also turns it off). */
   metrics?: boolean;
-  /** Replace the metric exporter (tests). */
+  /** Replace the metric exporter (tests); setting it turns metrics on unless `metrics` is false. */
   metricExporter?: unknown;
-  /** OTLP/HTTP base URL; defaults to WT_OTLP_ENDPOINT or http://localhost:4318. */
+  /** OTLP/HTTP base URL; defaults to WT_OTLP_ENDPOINT, then OTEL_EXPORTER_OTLP_ENDPOINT, then http://localhost:4318. */
   endpoint?: string;
   /** REST API base URL for getPrompt/score; defaults to WT_API_URL or endpoint. */
   apiUrl?: string;
   project?: string;
-  /** Defaults to WT_SERVICE. */
+  /** Defaults to WT_SERVICE, then OTEL_SERVICE_NAME, then `service.name` in OTEL_RESOURCE_ATTRIBUTES, then `app`. */
   serviceName?: string;
-  /** Resource attributes; keys starting with `wt.` are dropped. */
+  /** Resource attributes (on top of OTEL_RESOURCE_ATTRIBUTES); keys starting with `wt.` are dropped. */
   resource?: Record<string, string | number | boolean>;
-  /** Called for every span attribute before export; return the value to keep. */
+  /**
+   * Called before export for every span attribute, every span event's and link's attributes (so `exception.message`
+   * and `exception.stacktrace`), the span name (key `span.name`), the status message (`status.message`) and each log
+   * body (`log.body`) and log attribute; return the value to keep.
+   */
   redact?: (key: string, value: unknown) => unknown;
   /** Directory for the offline buffer. */
   bufferDir?: string;
+  /** Apply the project's head sampling rules in the SDK, polled from /v1/sampling; defaults to WT_REMOTE_SAMPLING=1. Spans dropped here never reach the gateway, so its exact request counts see only what is kept. */
+  remoteSampling?: boolean;
+  /** Seconds between sampling polls; defaults to WT_SAMPLING_INTERVAL_S or 30. */
+  samplingIntervalS?: number;
+  /** Stamp code.filepath / code.lineno / code.function on spans (the code that started the span); defaults to WT_CODE_ORIGIN=1. */
+  codeOrigin?: boolean;
   /** Fetch the service's payload capture rules (APM-016) and record bodies/GraphQL where a rule matches; defaults to WT_CAPTURE_RULES=1. */
   captureRules?: boolean;
   /** Replace the span exporter (tests). */
   exporter?: unknown;
+  /** Patch node:http, fetch (undici), pg and ioredis for those whose `@opentelemetry/instrumentation-*` peer is installed; defaults to on unless WT_INSTRUMENT=0. `init` only: use the `/register` preload so it runs before the app imports them. */
+  instrument?: boolean;
   fetch?: typeof fetch;
 }
 
@@ -95,9 +120,10 @@ export class Client {
   readonly endpoint: string;
   readonly apiUrl: string;
   readonly project: string | undefined;
-  readonly headers: { Authorization: string };
+  readonly headers: { Authorization: string } & Record<string, string>;
   readonly fetch: typeof fetch;
   readonly redact: InitOptions['redact'];
+  private readonly logCaller: boolean;
   readonly provider: TracerProvider;
   readonly resource: Resource;
   readonly tracer: Tracer;
@@ -107,31 +133,36 @@ export class Client {
   readonly meterProvider?: MeterProvider;
   private readonly stopRuntime: () => void = () => {};
   uninstall?: () => void;
+  /** Set when remote sampling is on. */
+  remoteSampler?: RemoteSampler;
   /** Set when WT_PROFILING=1 started the continuous profiler. */
   profiler?: Promise<Profiler | undefined>;
 
   constructor(opts: InitOptions) {
     const o = opts || {};
     const env = process.env;
-    const apiKey = o.apiKey || env.WT_INGEST_KEY;
+    const oe = otelEnv(env);
+    const apiKey = o.apiKey || env.WT_INGEST_KEY || oe.bearer;
     if (!apiKey) throw new Error('apiKey is required (or set WT_INGEST_KEY)');
-    this.endpoint = (o.endpoint || env.WT_OTLP_ENDPOINT || DEFAULT_ENDPOINT).replace(/\/+$/, '');
+    this.endpoint = (o.endpoint || env.WT_OTLP_ENDPOINT || oe.endpoint || DEFAULT_ENDPOINT).replace(/\/+$/, '');
     this.apiUrl = (o.apiUrl || env.WT_API_URL || this.endpoint).replace(/\/+$/, '');
     this.project = o.project || env.WT_PROJECT_ID;
-    this.headers = { Authorization: `Bearer ${apiKey}` };
+    this.headers = { ...oe.headers, Authorization: `Bearer ${apiKey}` };
     this.fetch = o.fetch || globalThis.fetch;
-    const environment = o.environment || env.WT_ENVIRONMENT;
-    const release = o.release || env.WT_RELEASE;
+    const environment = o.environment || env.WT_ENVIRONMENT || oe.resource['deployment.environment.name'];
+    const release = o.release || env.WT_RELEASE || oe.resource['service.version'];
     // the OTel SDK packages are optional peers, loaded here (not at import time) with a clear error when missing
     const { resourceFromAttributes } = needPeer<typeof import('@opentelemetry/resources')>('@opentelemetry/resources');
     const resource = resourceFromAttributes({
-      'service.name': o.serviceName || env.WT_SERVICE || 'app',
+      ...(safeResource(oe.resource) as DetectedResourceAttributes),
+      'service.name': o.serviceName || env.WT_SERVICE || oe.serviceName || 'app',
       ...(environment ? { 'deployment.environment.name': environment } : {}),
       ...(release ? { 'service.version': release } : {}),
       ...(safeResource(o.resource) as DetectedResourceAttributes),
     });
     this.resource = resource;
     this.redact = o.redact;
+    this.logCaller = o.logCaller ?? env.WATCHTOWER_LOG_CALLER === '1';
     let exporter = o.exporter as SpanExporter | undefined;
     if (!exporter) {
       const url = `${this.endpoint}/v1/traces`;
@@ -142,29 +173,41 @@ export class Client {
     }
     // the redactor runs first, so the batch processor exports redacted attributes
     const { BatchSpanProcessor, TracerProvider: TP } = needPeer<typeof import('@opentelemetry/sdk-trace')>('@opentelemetry/sdk-trace');
+    let sampler: unknown;
+    if (o.remoteSampling ?? env.WT_REMOTE_SAMPLING === '1') {
+      const { ParentBasedSampler } = needPeer<typeof import('@opentelemetry/sdk-trace')>('@opentelemetry/sdk-trace');
+      this.remoteSampler = new RemoteSampler({
+        endpoint: this.endpoint, headers: this.headers, service: String(resource.attributes['service.name']), env: environment,
+        intervalMs: (o.samplingIntervalS ?? (Number(env.WT_SAMPLING_INTERVAL_S) || 30)) * 1000, fetch: this.fetch,
+      });
+      sampler = new ParentBasedSampler({ root: this.remoteSampler });
+    }
     this.provider = new TP({
       resource,
-      spanProcessors: [...(o.redact ? [redactor(o.redact)] : []), new BatchSpanProcessor({ exporter })],
+      ...(sampler ? { sampler: sampler as never } : {}),
+      spanProcessors: [
+        ...(o.codeOrigin ?? env.WT_CODE_ORIGIN === '1' ? [codeOrigin()] : []),
+        ...(o.redact ? [redactor(o.redact)] : []),
+        new BatchSpanProcessor({ exporter }),
+      ],
     });
     this.tracer = this.provider.getTracer('watchtower');
-    const logsOn = switchOn('WATCHTOWER_LOGS', 'OTEL_LOGS_EXPORTER', o.logs);
+    // an explicit exporter never switches the other signals off: only `logs` / `metrics` / the env switches do
+    const logsOn = switchOn('WATCHTOWER_LOGS', 'OTEL_LOGS_EXPORTER', o.logs ?? (o.logExporter ? true : undefined));
     let logExporter = logsOn ? (o.logExporter as LogRecordExporter | undefined) : undefined;
-    if (logsOn && !logExporter && !o.exporter) {
+    if (logsOn && !logExporter) {
       const url = `${this.endpoint}/v1/logs`;
       const { OTLPLogExporter } = needPeer<typeof import('@opentelemetry/exporter-logs-otlp-http')>('@opentelemetry/exporter-logs-otlp-http');
       logExporter = new OTLPLogExporter({ url, headers: this.headers });
       if (o.bufferDir) logExporter = spoolLogs(logExporter, nodePath.join(o.bufferDir, 'logs'), url, this.headers, this.fetch);
     }
-    const { LoggerProvider: LP, SimpleLogRecordProcessor, BatchLogRecordProcessor } = needPeer<typeof import('@opentelemetry/sdk-logs')>('@opentelemetry/sdk-logs');
+    const { LoggerProvider: LP, BatchLogRecordProcessor } = needPeer<typeof import('@opentelemetry/sdk-logs')>('@opentelemetry/sdk-logs');
     this.loggerProvider = new LP({
       resource,
-      processors: !logExporter ? [] : [o.logExporter
-        ? new SimpleLogRecordProcessor({ exporter: logExporter })
-        : new BatchLogRecordProcessor({ exporter: logExporter })],
+      processors: !logExporter ? [] : [new BatchLogRecordProcessor({ exporter: logExporter })],
     });
     this.logger = this.loggerProvider.getLogger('watchtower');
-    // with a test span exporter only an explicit metric exporter is used, as for logs
-    if (switchOn('WATCHTOWER_METRICS', 'OTEL_METRICS_EXPORTER', o.metrics) && (o.metricExporter || !o.exporter)) {
+    if (switchOn('WATCHTOWER_METRICS', 'OTEL_METRICS_EXPORTER', o.metrics ?? (o.metricExporter ? true : undefined))) {
       const m = startMetrics(this.endpoint, this.headers, resource, o.bufferDir, this.fetch, o.metricExporter as PushMetricExporter | undefined);
       this.meterProvider = m.provider;
       this.stopRuntime = m.stop;
@@ -178,7 +221,11 @@ export class Client {
   log(level: LogLevel, body: string, attributes?: Record<string, unknown>): void {
     let attrs = dropReserved(attributes);
     const redact = this.redact;
-    if (redact) attrs = Object.fromEntries(Object.entries(attrs).map(([k, v]) => [k, redact(k, v)]));
+    if (redact) {
+      attrs = Object.fromEntries(Object.entries(attrs).map(([k, v]) => [k, redact(k, v)]));
+      body = String(redact(LOG_BODY_KEY, body) ?? '');
+    }
+    if (this.logCaller) attrs = { ...attrs, ...callerOf(new Error().stack) };
     this.logger.emit({
       severityNumber: SEVERITY[level] || SEVERITY.info,
       severityText: String(level).toUpperCase(),
@@ -282,41 +329,46 @@ export class Client {
 
   shutdown(): Promise<void> {
     this.stopRuntime();
+    this.remoteSampler?.stop();
     return Promise.all([this.profiler?.then((p) => p?.stop()),this.provider.shutdown(), this.loggerProvider.shutdown(), this.meterProvider?.shutdown()]).then(() => undefined);
   }
 }
 
-function redactor(hook: (key: string, value: unknown) => unknown): SpanProcessor {
-  return {
-    onStart() {},
-    onEnd(span) {
-      for (const k of Object.keys(span.attributes)) span.attributes[k] = hook(k, span.attributes[k]) as AttributeValue;
-    },
-    shutdown: () => Promise.resolve(),
-    forceFlush: () => Promise.resolve(),
-  };
-}
+// One state per process, not per module copy: a CommonJS and an ESM copy of this package (a `-r` preload plus an `import`
+// app, say) must share the client or flush()/shutdown() in one copy would miss the init() of the other.
+const state = ((globalThis as Record<symbol, unknown>)[Symbol.for('watchtower.node.state')] ??= {}) as { current?: Client; ownsGlobals?: boolean };
 
-let current: Client | undefined;
-export function init(opts: InitOptions): Client {
-  if (current && current.uninstall) current.uninstall();
-  void current?.profiler?.then((p) => p?.stop());
-  const c = new Client(opts);
-  current = c;
-  // Global tracer + async context so trace.getActiveSpan() works; a re-init replaces the previous client's.
-  trace.disable();
-  context.disable();
-  propagation.disable();
+/**
+ * Register the global tracer provider, context manager, propagator and meter provider. OTel allows each to be set once
+ * (a second set returns false and changes nothing), so a provider the app or an earlier instrumentation registered is
+ * left alone and a warning says so; only globals a previous `init` installed are torn down on a re-init.
+ */
+function registerGlobals(c: Client): void {
+  if (state.ownsGlobals) { // a re-init replaces what the previous init installed
+    trace.disable();
+    context.disable();
+    propagation.disable();
+    metrics.disable();
+  }
   const { AsyncLocalStorageContextManager } = needPeer<typeof import('@opentelemetry/context-async-hooks')>('@opentelemetry/context-async-hooks');
   const { CompositePropagator, W3CBaggagePropagator, W3CTraceContextPropagator } = needPeer<typeof import('@opentelemetry/core')>('@opentelemetry/core');
-  context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
-  propagation.setGlobalPropagator(new CompositePropagator({
-    propagators: [new W3CTraceContextPropagator(), new W3CBaggagePropagator()],
-  }));
-  trace.setGlobalTracerProvider(c.provider);
-  if (c.meterProvider) {
-    metrics.disable(); // a re-init replaces the previous client's provider
-    metrics.setGlobalMeterProvider(c.meterProvider);
+  const ok = [
+    trace.setGlobalTracerProvider(c.provider),
+    context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable()),
+    propagation.setGlobalPropagator(new CompositePropagator({ propagators: [new W3CTraceContextPropagator(), new W3CBaggagePropagator()] })),
+    ...(c.meterProvider ? [metrics.setGlobalMeterProvider(c.meterProvider)] : []),
+  ];
+  state.ownsGlobals = ok[0] === true;
+  if (ok.includes(false)) diag.warn('watchtower: an OpenTelemetry global (tracer provider, context manager, propagator or meter provider) was already registered and was kept; call init() before other OTel setup to own them');
+}
+export function init(opts: InitOptions): Client {
+  if (state.current && state.current.uninstall) state.current.uninstall();
+  void state.current?.profiler?.then((p) => p?.stop());
+  const c = new Client(opts);
+  state.current = c;
+  registerGlobals(c);
+  if (opts?.instrument ?? !['0', 'off', 'false', 'no'].includes((process.env.WT_INSTRUMENT || '').trim().toLowerCase())) {
+    instrumentAll({ tracerProvider: c.provider, meterProvider: c.meterProvider }, [c.endpoint, c.apiUrl]);
   }
   if (process.env.WT_PROFILING === '1') {
     const attrs = c.resource.attributes;
@@ -333,11 +385,11 @@ export function init(opts: InitOptions): Client {
   return c;
 }
 function need(): Client {
-  if (!current) throw new Error('watchtower.init() has not been called');
-  return current;
+  if (!state.current) throw new Error('watchtower.init() has not been called');
+  return state.current;
 }
 
-export const flush = (): Promise<unknown> => (current ? current.forceFlush() : Promise.resolve());
+export const flush = (): Promise<unknown> => (state.current ? state.current.forceFlush() : Promise.resolve());
 export const log = (l: LogLevel, b: string, a?: Record<string, unknown>): void => need().log(l, b, a);
 export const getPrompt = (id: string): Promise<unknown> => need().getPrompt(id);
 export const score = (t: string, v: number | boolean | string, o?: ScoreOptions): Promise<unknown> => need().score(t, v, o);
@@ -345,4 +397,4 @@ export const evaluate = (d: unknown[], t: EvalTask, s: Scorers, o?: EvalOptions)
 export const evaluateResume = (d: unknown[], t: EvalTask, s: Scorers, prev: EvalRow[], o?: EvalOptions): Promise<EvalRow[]> =>
   need().evaluateResume(d, t, s, prev, o);
 export const observe = <A extends unknown[], R>(n: string, f: (...a: A) => R): ((...a: A) => R) => need().observe(n, f);
-export const shutdown = (): Promise<void> => (current ? current.shutdown() : Promise.resolve());
+export const shutdown = (): Promise<void> => (state.current ? state.current.shutdown() : Promise.resolve());

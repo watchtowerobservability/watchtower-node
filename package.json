@@ -1,6 +1,6 @@
 {
   "name": "@watchtowerobservability/node",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/watchtowerobservability/watchtower-node.git"
@@ -346,6 +346,16 @@
         "types": "./dist/cjs/profiling.d.ts",
         "default": "./dist/cjs/profiling.js"
       }
+    },
+    "./register": {
+      "import": {
+        "types": "./dist/esm/register.d.ts",
+        "default": "./dist/esm/register.js"
+      },
+      "require": {
+        "types": "./dist/cjs/register.d.ts",
+        "default": "./dist/cjs/register.js"
+      }
     }
   },
   "license": "Apache-2.0",
@@ -356,7 +366,8 @@
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "smoke": "node scripts/smoke-pack.mjs"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.10.0"
@@ -367,7 +378,12 @@
     "@opentelemetry/exporter-logs-otlp-http": "^0.301.0",
     "@opentelemetry/exporter-metrics-otlp-http": "^0.301.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.301.0",
+    "@opentelemetry/instrumentation": ">=0.200.0",
+    "@opentelemetry/instrumentation-http": ">=0.200.0",
+    "@opentelemetry/instrumentation-ioredis": ">=0.50.0",
+    "@opentelemetry/instrumentation-pg": ">=0.50.0",
     "@opentelemetry/instrumentation-runtime-node": ">=0.38.0",
+    "@opentelemetry/instrumentation-undici": ">=0.10.0",
     "@opentelemetry/otlp-transformer": "^0.301.0",
     "@opentelemetry/resources": "^3.1.0",
     "@opentelemetry/sdk-logs": "^3.1.0",
@@ -391,7 +407,22 @@
     "@opentelemetry/exporter-trace-otlp-http": {
       "optional": true
     },
+    "@opentelemetry/instrumentation": {
+      "optional": true
+    },
+    "@opentelemetry/instrumentation-http": {
+      "optional": true
+    },
+    "@opentelemetry/instrumentation-ioredis": {
+      "optional": true
+    },
+    "@opentelemetry/instrumentation-pg": {
+      "optional": true
+    },
     "@opentelemetry/instrumentation-runtime-node": {
+      "optional": true
+    },
+    "@opentelemetry/instrumentation-undici": {
       "optional": true
     },
     "@opentelemetry/otlp-transformer": {

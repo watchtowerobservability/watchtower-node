@@ -33,7 +33,7 @@ async function otlpServer(): Promise<{ got: Got[]; url: string; close: () => Pro
 test('logs carry the active trace and span ids and metrics are delta, both on the OTLP endpoint', async () => {
   delete process.env.OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE;
   const s = await otlpServer();
-  const c = wt.init({ apiKey: 'test-key-not-real', endpoint: s.url, captureProcessErrors: false });
+  const c = wt.init({ apiKey: 'test-key-not-real', endpoint: s.url, captureProcessErrors: false, logs: true, metrics: true });
   let ctx: SpanContext | undefined;
   c.tracer.startActiveSpan('op', (span) => {
     c.log('info', 'hello');
