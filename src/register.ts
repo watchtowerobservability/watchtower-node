@@ -13,10 +13,19 @@ if (process.env.WT_INGEST_KEY || process.env.OTEL_EXPORTER_OTLP_HEADERS) {
     const key = Symbol.for('watchtower.node.esm-hook');
     if (!g[key]) {
       g[key] = true;
+      // Node 26 prints DEP0205 for module.register(); import-in-the-middle's hook has no sync (registerHooks) form yet,
+      // so mute only that one warning for this call.
+      const emit = process.emitWarning;
+      process.emitWarning = ((w: unknown, ...a: unknown[]) => {
+        if (JSON.stringify(a).includes('DEP0205')) return;
+        return (emit as (...x: unknown[]) => void).call(process, w, ...a);
+      }) as typeof process.emitWarning;
       try {
         registerHooks('@opentelemetry/instrumentation/hook.mjs', pathToFileURL(`${process.cwd()}/`));
       } catch {
         // @opentelemetry/instrumentation not installed: CommonJS apps are still instrumented
+      } finally {
+        process.emitWarning = emit;
       }
     }
     init({});

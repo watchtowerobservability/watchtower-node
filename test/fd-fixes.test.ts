@@ -88,6 +88,7 @@ test('ESM load.js is the compiled load.ts: exports load and need, no hand-writte
   const build = readFileSync(join(__dirname, '../scripts/build.mjs'), 'utf8');
   expect(build).not.toMatch(/export function load/);
   const src = readFileSync(join(__dirname, '../src/load.ts'), 'utf8');
-  expect(src).toMatch(/require\('@opentelemetry\/resources'\)/); // literal, so bundlers can follow it
+  expect(src).not.toMatch(/require\('@opentelemetry/); // no literal peer names: webpack must not follow optional peers (V-17)
+  expect(src).not.toMatch(/[^.\w]require\(id\)/); // a bare require(id) is webpack's "Critical dependency"
   expect(() => loader.need('@opentelemetry/not-installed-pkg')).toThrow();
 });

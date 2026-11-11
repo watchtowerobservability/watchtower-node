@@ -1,43 +1,26 @@
-// Optional-peer loader. Each peer is required by a LITERAL name inside a try block so bundlers (webpack, esbuild, Next's
-// file tracer) can follow it; a computed `require(name)` is invisible to them. This is the CommonJS form;
-// scripts/build.mjs prepends `const require = createRequire(import.meta.url)` for dist/esm (webpack follows that too).
-// The cwd fallback only matters when `require` does not exist (test runners running the TS source as ESM).
+// Optional-peer loader (same source for the CommonJS and ESM builds).
 import { createRequire } from 'node:module';
 
-const NONE = Symbol('not a known peer');
-
-function known(id: string): unknown {
-  try { // bundlers only tolerate an optional require that is lexically inside try
-    switch (id) {
-      case '@opentelemetry/context-async-hooks': return require('@opentelemetry/context-async-hooks');
-      case '@opentelemetry/core': return require('@opentelemetry/core');
-      case '@opentelemetry/exporter-logs-otlp-http': return require('@opentelemetry/exporter-logs-otlp-http');
-      case '@opentelemetry/exporter-metrics-otlp-http': return require('@opentelemetry/exporter-metrics-otlp-http');
-      case '@opentelemetry/exporter-trace-otlp-http': return require('@opentelemetry/exporter-trace-otlp-http');
-      case '@opentelemetry/otlp-transformer': return require('@opentelemetry/otlp-transformer');
-      case '@opentelemetry/resources': return require('@opentelemetry/resources');
-      case '@opentelemetry/sdk-logs': return require('@opentelemetry/sdk-logs');
-      case '@opentelemetry/sdk-metrics': return require('@opentelemetry/sdk-metrics');
-      case '@opentelemetry/sdk-trace': return require('@opentelemetry/sdk-trace');
-      case '@opentelemetry/instrumentation-runtime-node': return require('@opentelemetry/instrumentation-runtime-node');
-      case '@opentelemetry/instrumentation': return require('@opentelemetry/instrumentation');
-      case '@opentelemetry/instrumentation-http': return require('@opentelemetry/instrumentation-http');
-      case '@opentelemetry/instrumentation-undici': return require('@opentelemetry/instrumentation-undici');
-      case '@opentelemetry/instrumentation-pg': return require('@opentelemetry/instrumentation-pg');
-      case '@opentelemetry/instrumentation-ioredis': return require('@opentelemetry/instrumentation-ioredis');
-      case '@opentelemetry/instrumentation-mysql2': return require('@opentelemetry/instrumentation-mysql2');
-      case 'winston-transport': return require('winston-transport');
-      default: return NONE;
-    }
-  } catch (e) {
-    throw e;
-  }
+// Bundlers must NOT follow this: an optional peer the app did not install would make webpack warn "Module not found",
+// and a bare require call on a variable id is a "Critical dependency" warning. createRequire() is opaque to webpack/esbuild/Next's tracer,
+// so peers resolve at run time from the SDK's own location, then from the app root (cwd). Install the peers in the app
+// (pnpm: as direct dependencies); for a Next standalone build add them to outputFileTracingIncludes.
+function resolvers(): NodeRequire[] {
+  const from = [typeof __filename === 'string' ? __filename : '', `${process.cwd()}/`].filter(Boolean);
+  return from.map((f) => createRequire(f));
 }
 
 export function load(id: string): unknown {
-  if (typeof require !== 'function') return createRequire(`${process.cwd()}/`)(id);
-  const m = known(id);
-  return m === NONE ? require(id) : m;
+  let err: unknown;
+  for (const r of resolvers()) {
+    try {
+      return r(id);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException)?.code !== 'MODULE_NOT_FOUND') throw e;
+      err ??= e;
+    }
+  }
+  throw err;
 }
 
 const SDK_PEERS = [

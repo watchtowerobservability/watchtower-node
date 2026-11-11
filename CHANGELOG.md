@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.7.1
+
+- Fix (bundlers): optional OpenTelemetry peers are no longer named by a literal `require` / `import()`; `load()` uses `createRequire` (from the SDK's location, then the app root), so webpack and Next no longer print "Module not found" for peers you did not install or a "Critical dependency" warning. Install the peers you use as direct dependencies of the app (for a Next standalone build add them to `outputFileTracingIncludes` if the tracer misses one).
+- Fix (types): emitted `.d.ts` files mark every optional-peer import with `// @ts-ignore`, so `tsc` with `skipLibCheck: false` no longer fails with TS2307 when a peer is not installed (the type is `any` then, the real type when installed). `scripts/dts-peers.mjs` does it at build time; `test/dts-peers.test.ts` checks it.
+- Fix: the `register` preload no longer prints Node 26's `DEP0205` (`module.register()`) deprecation warning.
+
 ## 0.7.0
 
 - URL scrubbing on by default (`urlScrubbing: false` to opt out): a span processor drops the query string, removes `url.query` and replaces secret-looking path segments (>= 24 chars, or >= 10 chars with a letter and a digit; UUIDs too) with `:redacted` in `http.target`, `url.full`, `url.path`, `http.url` and URLs in span names, on every span including Next.js, http and fetch spans. `http.route` is kept. README no longer claims query strings are "never recorded" without saying how. Behaviour change: URLs that carried long ids now show `:redacted`.

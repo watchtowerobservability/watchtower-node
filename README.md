@@ -99,9 +99,9 @@ registered it re-sends the signal so the exit is unchanged. Under `next start`, 
 the server and calls `process.exit`; our flush starts first (the `register` hook runs before) and gets the time the server takes
 to close, so a very slow export can still be cut.
 
-Install the OpenTelemetry peers above in the app itself (with pnpm, as direct dependencies, so Next's standalone tracer copies them). The SDK requires each peer by its literal name, so webpack and Next's file tracer can follow them; if the SDK arrives through a transpiled workspace package, add it to `transpilePackages`. Add `outputFileTracingIncludes` for the peers only if the standalone build still reports a missing `@opentelemetry/*` package.
+Install the OpenTelemetry peers above in the app itself (with pnpm, as direct dependencies). The SDK loads peers at run time through `createRequire`, which webpack does not follow, so a build prints no "Module not found" warning for peers you did not install. Next's standalone file tracer does not follow them either: add the peers you use to `outputFileTracingIncludes` (for example `{ '/*': ['./node_modules/@opentelemetry/**'] }`).
 
-Bundling with esbuild or webpack (ESM or CommonJS output) works: both the CommonJS and ESM builds name every optional peer with a literal `require`/`import()` inside try, so the bundler follows the peers you have installed and skips the rest.
+Bundling with esbuild or webpack (ESM or CommonJS output) works without warnings; mark the peers you use as externals (or ship `node_modules`), because they are resolved at run time. Declarations name optional peers behind `// @ts-ignore`, so `skipLibCheck: false` builds compile without them installed.
 
 ## Integrations
 
