@@ -465,7 +465,7 @@
     "@opentelemetry/sdk-trace": "^3.1.0",
     "@types/node": "22.15.0",
     "typescript": "5.7.2",
-    "vitest": "5.0.5",
+    "vitest": "5.1.0",
     "winston-transport": "^4.9.0"
   }
 }
