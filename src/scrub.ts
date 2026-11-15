@@ -4,16 +4,28 @@ import type { SpanProcessor } from '@opentelemetry/sdk-trace';
 const URL_KEYS = ['http.target', 'url.full', 'url.path', 'http.url', 'http.request.url'];
 const QUERY_KEYS = ['url.query'];
 
-/** A path segment that reads like a secret or an opaque id: >= 24 chars, or >= 10 chars mixing a letter and a digit (UUIDs included). */
-export function looksSecret(seg: string): boolean {
-  return seg.length >= 24 || (seg.length >= 10 && /[A-Za-z]/.test(seg) && /\d/.test(seg));
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const HEX = /^[0-9a-f]{16,}$/i;
+const JWT = /^eyJ[\w-]*\.[\w-]+\.[\w-]*$/;
+const DIGITS = /^\d{16,}$/;
+const TOKEN = /^[A-Za-z0-9_+=-]{16,}$/;
+// readable word-ish part of a kebab/snake slug: `legal`, `Intake`, `q1`, `2024`
+const PART = /^([A-Za-z][a-z]*\d{0,2}|\d{1,4})$/;
+
+/**
+ * A path segment that looks like a secret: UUID, hex run >= 16, JWT, digit run >= 16, or an opaque token (>= 16 chars of
+ * [A-Za-z0-9_+=-] with a letter and a digit that is not a readable kebab/snake slug). Words, slugs, short ids and file names stay.
+ * Same rule in the browser SDK and the gateway (`redact.ScrubURL`).
+ */
+export function isSecretSegment(s: string): boolean {
+  return UUID.test(s) || HEX.test(s) || JWT.test(s) || DIGITS.test(s) || (TOKEN.test(s) && /\d/.test(s) && /[a-z]/i.test(s) && !s.split(/[-_]/).every((p) => PART.test(p)));
 }
 
-/** Drop the query string and fragment, strip `user:pass@`, and replace secret-looking path segments with `:redacted`. */
+/** Drop the query string and fragment, strip `user:pass@`, and replace secret-looking path segments with `:redacted`. The scheme and host are never touched. */
 export function scrubUrl(value: string): string {
-  const m = /^(?:([a-z][a-z0-9+.-]*:\/\/)([^/?#]*))?([^?#]*)/i.exec(value)!;
-  const origin = m[1] ? m[1] + m[2]!.replace(/^[^@]*@/, '') : '';
-  return origin + m[3]!.split('/').map((s) => (looksSecret(s) ? ':redacted' : s)).join('/');
+  const m = /^(?:([a-z][a-z0-9+.-]*:)?\/\/([^/?#]*))?([^?#]*)/i.exec(value)!;
+  const origin = m[2] === undefined ? '' : `${m[1] ?? ''}//${m[2].replace(/^[^@]*@/, '')}`;
+  return origin + m[3]!.split('/').map((s) => (isSecretSegment(s) ? ':redacted' : s)).join('/');
 }
 
 function scrubName(name: string): string {

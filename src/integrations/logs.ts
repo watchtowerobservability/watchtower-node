@@ -13,9 +13,18 @@ const defaultSink: LogSink = { log: (level, body, attrs) => wt.log(level as LogL
 
 const PINO: Record<number, LogLevel> = { 10: 'trace', 20: 'debug', 30: 'info', 40: 'warn', 50: 'error', 60: 'fatal' };
 const CORE = new Set(['level', 'time', 'msg', 'pid', 'hostname', 'v']);
-const flat = (o: Record<string, unknown>, skip?: Set<string>): Record<string, unknown> => {
-  const attrs: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(o)) if (!skip || !skip.has(k)) attrs[k] = typeof v === 'object' ? JSON.stringify(v) : v;
+const MAX_DEPTH = 4;
+const plain = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && Object.getPrototypeOf(v) === Object.prototype;
+const prim = (v: unknown): boolean => v == null || ['string', 'number', 'boolean'].includes(typeof v);
+/** Nested plain objects become dotted attributes (`req.url`) up to depth 4 so `redact` and the presets see each leaf; arrays of primitives stay arrays, anything else is a JSON string. */
+const flat = (o: Record<string, unknown>, skip?: Set<string>, prefix = '', depth = 1, attrs: Record<string, unknown> = {}): Record<string, unknown> => {
+  for (const [k, v] of Object.entries(o)) {
+    if (skip && skip.has(k)) continue;
+    const key = prefix + k;
+    if (plain(v) && depth < MAX_DEPTH) flat(v, undefined, `${key}.`, depth + 1, attrs);
+    else if (Array.isArray(v) && v.every(prim)) attrs[key] = v;
+    else attrs[key] = typeof v === 'object' && v !== null ? JSON.stringify(v) : v;
+  }
   return attrs;
 };
 

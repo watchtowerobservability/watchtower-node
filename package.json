@@ -1,6 +1,6 @@
 {
   "name": "@watchtowerobservability/node",
-  "version": "0.7.1",
+  "version": "0.7.5",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/watchtowerobservability/watchtower-node.git"
@@ -14,6 +14,7 @@
   "module": "./dist/esm/index.js",
   "types": "./dist/cjs/index.d.ts",
   "bin": {
+    "wt-next-doctor": "./dist/cjs/next-doctor-cli.js",
     "wt-next-sourcemaps": "./dist/cjs/next-sourcemaps-cli.js"
   },
   "files": [
@@ -141,6 +142,46 @@
         "default": "./dist/cjs/integrations/next.js"
       }
     },
+    "./next-build": {
+      "import": {
+        "types": "./dist/esm/integrations/next-build.d.ts",
+        "default": "./dist/esm/integrations/next-build.js"
+      },
+      "require": {
+        "types": "./dist/cjs/integrations/next-build.d.ts",
+        "default": "./dist/cjs/integrations/next-build.js"
+      }
+    },
+    "./tunnel": {
+      "import": {
+        "types": "./dist/esm/integrations/next-tunnel.d.ts",
+        "default": "./dist/esm/integrations/next-tunnel.js"
+      },
+      "require": {
+        "types": "./dist/cjs/integrations/next-tunnel.d.ts",
+        "default": "./dist/cjs/integrations/next-tunnel.js"
+      }
+    },
+    "./temporal": {
+      "import": {
+        "types": "./dist/esm/integrations/temporal.d.ts",
+        "default": "./dist/esm/integrations/temporal.js"
+      },
+      "require": {
+        "types": "./dist/cjs/integrations/temporal.d.ts",
+        "default": "./dist/cjs/integrations/temporal.js"
+      }
+    },
+    "./next-tunnel": {
+      "import": {
+        "types": "./dist/esm/integrations/next-tunnel.d.ts",
+        "default": "./dist/esm/integrations/next-tunnel.js"
+      },
+      "require": {
+        "types": "./dist/cjs/integrations/next-tunnel.d.ts",
+        "default": "./dist/cjs/integrations/next-tunnel.js"
+      }
+    },
     "./prisma": {
       "import": {
         "types": "./dist/esm/integrations/prisma.d.ts",
@@ -249,6 +290,16 @@
       "require": {
         "types": "./dist/cjs/integrations/orm.d.ts",
         "default": "./dist/cjs/integrations/orm.js"
+      }
+    },
+    "./messaging": {
+      "import": {
+        "types": "./dist/esm/integrations/messaging.d.ts",
+        "default": "./dist/esm/integrations/messaging.js"
+      },
+      "require": {
+        "types": "./dist/cjs/integrations/messaging.d.ts",
+        "default": "./dist/cjs/integrations/messaging.js"
       }
     },
     "./amqp": {

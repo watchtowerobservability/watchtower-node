@@ -78,6 +78,19 @@ test('bullmq: producer and consumer spans share a trace through job data', async
   expect(failed!.status.code).toBe(2);
 });
 
+test('bullmq: captureFailures records an error with job attributes on the final attempt only', async () => {
+  class Q { name = 'q'; add() { return Promise.resolve(undefined); } }
+  class W { name = 'jobs'; callProcessJob(_j: unknown) { return Promise.reject(new Error('final')); } }
+  instrumentBullMQ({ Queue: Q, Worker: W } as never, { captureFailures: true });
+  const job = (made: number) => ({ id: '5', name: 'sync', data: {}, attemptsMade: made, opts: { attempts: 3 } });
+  await expect(new W().callProcessJob(job(0))).rejects.toThrow('final');
+  await expect(new W().callProcessJob(job(2))).rejects.toThrow('final');
+  const [first, last] = (await drain()).filter((x) => x.name === 'process jobs');
+  expect(first!.attributes['bullmq.job.attempts']).toBeUndefined();
+  expect(last!.attributes).toMatchObject({ 'error.handled': true, 'bullmq.queue': 'jobs', 'bullmq.job.name': 'sync', 'bullmq.job.id': '5', 'bullmq.job.attempt': 3, 'bullmq.job.attempts': 3 });
+  expect(last!.events.filter((e) => e.name === 'exception')).toHaveLength(1);
+});
+
 test('postgres: summary never carries values', () => {
   expect(querySummary("select * from users where email = 'x@y'")).toEqual({ operation: 'SELECT', target: 'users', summary: 'SELECT users' });
   expect(querySummary('insert into "app"."jobs" (a) values ($1)').summary).toBe('INSERT app.jobs');

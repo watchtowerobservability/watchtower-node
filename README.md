@@ -30,7 +30,7 @@ wt.init({ apiKey: process.env.WT_INGEST_KEY, project: process.env.WT_PROJECT_ID,
 
 ```ts
 import * as wt from '@watchtowerobservability/node';   // or: const wt = require('@watchtowerobservability/node');
-wt.init({});                                   // WT_INGEST_KEY, WT_SERVICE, WT_ENVIRONMENT, WT_RELEASE from env
+wt.init({});                                   // WT_INGEST_KEY, WT_SERVICE, WT_ENVIRONMENT, WT_RELEASE from env (release also falls back to the CI commit sha: GITHUB_SHA, CI_COMMIT_SHA, VERCEL_GIT_COMMIT_SHA, ...)
 const traceId = wt.captureException(new Error('oops')); // also: uncaught errors and unhandled rejections
 wt.log('info', 'started', { port: 3000 });     // OTLP log, linked to the active trace
 ```
@@ -39,9 +39,9 @@ wt.log('info', 'started', { port: 3000 });     // OTLP log, linked to the active
 flushes and exits with code 1 like Node does, only when no other handler is registered.
 Request bodies, headers and query arguments are never recorded. URLs are scrubbed on every span, including spans other
 libraries create (Next.js, `node:http`, `fetch`): the query string is dropped (`url.query` is removed) and path segments
-that look like secrets or ids (24 characters or more, or 10 or more mixing letters and digits; UUIDs included) become
-`:redacted`, in `http.target`, `url.full`, `url.path`, `http.url` and URLs in span names; `http.route` is kept.
-`/api/feed/<token>/csv?since=x` is recorded as `/api/feed/:redacted/csv`. Plain words, numbers and short ids stay readable.
+that look like secrets (UUIDs, hex runs of 16 or more, JWTs, digit runs of 16 or more, or random-looking tokens of 16 or more
+characters mixing letters and digits) become `:redacted`; the host never changes, in `http.target`, `url.full`, `url.path`, `http.url` and URLs in span names; `http.route` is kept.
+`/api/feed/<token>/csv?since=x` is recorded as `/api/feed/:redacted/csv`. Plain words, kebab and snake slugs (`legal-consultation-intake`), short ids (`/config/a1b2c3d4`) and file names stay readable.
 Pass `urlScrubbing: false` to record URLs as the instrumentation produced them. Your `redact` hook sees scrubbed values.
 
 ## Auto-instrumentation and preload
@@ -50,9 +50,26 @@ Pass `urlScrubbing: false` to record URLs as the instrumentation produced them. 
 (`@opentelemetry/instrumentation-mysql2`) is installed, and prints one line (`[watchtower] instrumented: http, undici, pg, better-sqlite3`);
 silence it with `instrumentLog: false` or `WT_INSTRUMENT_LOG=0`.
 
+Start the preload in the start command: `node --import @watchtowerobservability/node/register app.js` (or `node -r ...` for CommonJS).
+Do not use `NODE_OPTIONS=--import ...`: it leaks into healthchecks and `pnpm` itself, which cannot resolve the package from the image root.
+OpenTelemetry peers are looked up from the SDK's location, then the working directory, then the directory of the entry script, so in a pnpm
+monorepo the app that runs the script is enough.
+
 `wt.checkin('nightly-report', async () => { ... })` wraps a cron or scheduler job in check-ins to the monitor with that slug
 (`in_progress`, then `ok` or `error` with the duration; the key needs scope `ingest:checkins`; the edge accepts 6 a minute per monitor;
 failed check-ins never affect the job).
+
+## Cron monitors and check-ins
+
+Check-ins go to the edge host (`ingest.example.net` becomes `edge.example.net`; set `WT_CHECKIN_URL` to override) and need the `ingest:checkins` key scope. The edge accepts 6 a minute per monitor.
+
+- `checkIn('nightly-report', 'ok', { durationMs })`: one check-in. Fire and forget with a 5 s cap, never throws; add `wait: true` to await it (short-lived processes).
+- `withMonitor('nightly-report', async () => {...}, { schedule: '0 3 * * *', timezone: 'UTC', checkinMargin: 5, maxRuntime: 30, failureThreshold: 2 })` sends `in_progress`, then `ok` or `error` with the duration, returns your result and rethrows your error. The schedule is sent as `monitor_config` so the monitor is created or updated on first check-in. A 6-field cron with `0` seconds is sent as 5 fields. Its own request is not traced.
+- Nest: after `app.init()`, `instrumentNestSchedule(app.get(SchedulerRegistry))`. Every `@Cron(expr, { name: 'Nightly Report' })` job becomes the monitor `nightly-report` with its expression and timezone. Name your jobs: unnamed ones get a uuid and are skipped.
+- node-cron: `import cron from 'node-cron'; instrumentNodeCron(cron)` before scheduling; `cron.schedule(expr, fn, { name: 'sync-users' })` (or a named function) becomes a monitor.
+- BullMQ: `instrumentBullMQ(bullmq, { captureFailures: true, cronMonitors: true })`. `captureFailures` reports a job's last failed attempt as an error (attributes `bullmq.queue`, `bullmq.job.name`, `bullmq.job.id`, `bullmq.job.attempt`, `bullmq.job.attempts_made`, `bullmq.job.attempts`); `cronMonitors` runs repeatable jobs (`repeat.pattern`) as monitors named `<queue>-<job name>`.
+
+Set `captureProcessErrors: false` when your app already drains and exits on `uncaughtException` / `unhandledRejection`, so the two handlers do not race. The process error hooks (`captureProcessErrors`, default true) report `uncaughtException` and `unhandledRejection` and then exit with code 1 (after a 2 s flush) only when the SDK is the sole listener for that event; if your app or framework registers its own, the SDK only reports and leaves the exit to you.
 
 `init` patches `node:http`, `fetch` (undici), `pg` and `ioredis` for each `@opentelemetry/instrumentation-*` package you have installed (the list above); pass `instrument: false` or set `WT_INSTRUMENT=0` to skip. Patching only reaches modules loaded after it runs, so load the SDK first:
 
@@ -74,23 +91,23 @@ export const register = makeRegister({ redact: (k, v) => v });   // any InitOpti
 export { onRequestError } from '@watchtowerobservability/node/next';
 ```
 
-`makeRegister` also takes `nextInternals: 'drop' | 'sample' | 'keep'` (default `'sample'`, `nextInternalsRate` 0.1) for Next's
+`init()` applies `nextInternals` itself when `NEXT_RUNTIME` is set, so a plain `init()` in `register()` is filtered too (no double install). `nextInternals: 'drop' | 'sample' | 'keep'` (default `'sample'`, `nextInternalsRate` 0.1) for Next's
 own spans (those with a `next.span_type` attribute: load route module, prepare route module, resolve page components, start
-response, middleware, generateMetadata). Request, route handler, render, server action and fetch spans, all SERVER/CLIENT
+response, middleware, generateMetadata). Root (parentless) internals such as `LoadComponents.loadRouteModule` are sampled like the rest. Request, route handler, render, server action and fetch spans, all SERVER/CLIENT
 spans and errored spans are always kept; children of a dropped internal span stay in the trace.
 
 **Source maps.** `next.config.js`: `module.exports = withWatchtower(nextConfig, { sourcemaps: true })` (from
 `@watchtowerobservability/node/next`) turns on `productionBrowserSourceMaps`. Build with
 `"build": "next build && wt-next-sourcemaps"`: the `wt-next-sourcemaps` bin (or `uploadSourcemaps()`) uploads every `.map` under
-`.next/static` as `_next/static/<path>` for release `$WT_RELEASE` (create it first or let the upload create it; it must equal
-the browser SDK's `release`), with `$WT_API_KEY` and `$WT_PROJECT` (and `$WT_API_URL`), then deletes the `.map` files so they are
-never served. If an upload fails the command exits 1 and leaves the files. **Key scope: `ci:write`** (it covers releases and
+`.next/static` as `_next/static/<path>` for release `$WT_RELEASE` (the upload creates the release when it does not exist; it must equal
+the browser SDK's `release`), with `$WT_API_KEY` and `$WT_PROJECT` (and `$WT_API_URL`, default `https://watchtowerops.net`; the old `$WT_API` still works with a warning), then deletes the `.map` files so they are
+never served. Maps go up in one `POST /artifacts/bundle` request (a tar.gz plus manifest; about 120 MB per request) and fall back to single uploads, 8 at a time, when the server has no bundle route. Requests retry 429/5xx with backoff (honoring `Retry-After`) and continue past failures; the run prints `{uploaded, skipped, failed}` (`skipped`: the server already had the same bytes, HTTP 200) and exits 1 when any failed, leaving the files. Each map is sent with `for=<chunk path>` read from the chunk's `//# sourceMappingURL=` comment or the map's `file` field. A wrong host fails at once with a message naming it. Bodies are sent gzipped. **Key scope: `ci:write`** (it covers releases and
 artifacts; `admin:write` also works). Ingest keys cannot upload. Turbopack and webpack both emit these maps; Next does not inject
 debug ids, so maps match by release and file name.
 
 **First-party tunnel** (ad blockers block third-party telemetry hosts): `app/api/wt/[...path]/route.ts`:
 `export const { GET, POST } = tunnelHandler({ endpoint: process.env.WT_EDGE_URL! });`, then `init({ endpoint: '/api/wt', publishableKey })`
-in the browser SDK. Only `/v1/rum/*`, `/v1/replay/<session>/chunks` and `/v1/logs` are forwarded; the only credential passed on
+in the browser SDK. Only `/v1/rum/*`, `/v1/replay/<session>/chunks`, `/v1/logs` and `/v1/traces` are forwarded; the only credential passed on
 is the publishable key (`?k=` or a `wtp_` bearer), cookies and other headers are dropped, bodies over 1 MiB get 413
 (`maxBodyBytes`). The visitor's IP is the server's, so geo comes from the Next host unless the edge is told otherwise.
 
@@ -99,7 +116,9 @@ registered it re-sends the signal so the exit is unchanged. Under `next start`, 
 the server and calls `process.exit`; our flush starts first (the `register` hook runs before) and gets the time the server takes
 to close, so a very slow export can still be cut.
 
-Install the OpenTelemetry peers above in the app itself (with pnpm, as direct dependencies). The SDK loads peers at run time through `createRequire`, which webpack does not follow, so a build prints no "Module not found" warning for peers you did not install. Next's standalone file tracer does not follow them either: add the peers you use to `outputFileTracingIncludes` (for example `{ '/*': ['./node_modules/@opentelemetry/**'] }`).
+Install the OpenTelemetry peers above in the app itself (with pnpm, as direct dependencies). The SDK loads peers at run time through `createRequire`, which webpack does not follow, so a build prints no "Module not found" warning for peers you did not install. Next's standalone file tracer does not follow them either.
+
+Standalone recipe: wrap the config, `module.exports = withWatchtower(nextConfig)` (from `@watchtowerobservability/node/next-build`, or `@watchtowerobservability/next`). It adds the SDK and its OpenTelemetry peers to `serverExternalPackages` and `outputFileTracingIncludes` (npm and pnpm layouts). By hand, add the same packages to `serverExternalPackages` and `outputFileTracingIncludes: { '/*': ['./node_modules/@opentelemetry/**', './node_modules/@watchtowerobservability/node/**'] }`. If a peer is missing at run time, `init` logs one warning naming it; after `next build`, `npx wt-next-doctor` lists what `.next/standalone/node_modules` lacks and exits 1.
 
 Bundling with esbuild or webpack (ESM or CommonJS output) works without warnings; mark the peers you use as externals (or ship `node_modules`), because they are resolved at run time. Declarations name optional peers behind `// @ts-ignore`, so `skipLibCheck: false` builds compile without them installed.
 
@@ -110,7 +129,7 @@ Each lives at its own subpath, so nothing is loaded that you do not import.
 | Integration | Import | Use |
 | --- | --- | --- |
 | Express | `@watchtowerobservability/node/express` | `app.use(requestHandler())` first, `app.use(errorHandler())` last |
-| Fastify | `.../fastify` | `await app.register(plugin)` |
+| Fastify | `.../fastify` | `await app.register(plugin)`; use it or the plain http instrumentation, or both: with the http instrumentation active the plugin enriches its server span (route, status) instead of starting a second one |
 | Koa | `.../koa` | `app.use(middleware())` first |
 | NestJS | `.../nestjs` | `app.useGlobalInterceptors(new WatchtowerInterceptor())` (add express or fastify integration for spans) |
 | Next.js server | `.../next` | `instrumentation.js`: `module.exports = require('@watchtowerobservability/node/next')` (exports `register`, `onRequestError`) |
@@ -171,9 +190,24 @@ messaging conventions: `messaging.system=bullmq`, `messaging.destination.name`,
 Sandboxed processors (a file path instead of a function) run in a child process and get no consumer
 span.
 
+### Temporal
+
+```ts
+import { temporalInterceptors, watchTemporalSchedules } from '@watchtowerobservability/node/temporal';
+const worker = await Worker.create({ /* ... */, interceptors: temporalInterceptors() });   // activity spans; failures captured on the final attempt
+const stop = watchTemporalSchedules(client, { interval: 60_000 });                         // Schedule check-ins
+```
+
+Activity spans carry `temporal.activity.type`, `temporal.attempt`, `temporal.workflow.id`. An activity failure becomes an error only on its final
+attempt (a non-retryable failure, or `attempt >= maximumAttempts`; pass `temporalInterceptors({ maxAttempts })` when the activity info has no retry policy).
+Workflow code runs in Temporal's sandbox, so nothing is injected there. `watchTemporalSchedules` lists schedules, describes each, and checks every
+action's workflow: `in_progress` while running, `ok` when it completed, `error` when it failed, timed out, was terminated or cancelled. Each action is
+reported once. The slug is `temporal-<scheduleId>` and `monitor_config` carries the cron when the spec is a cron expression or one calendar.
+`@temporalio/*` is not imported by the SDK; you pass your own client. `namespaces` limits watching to those client namespaces.
+
 ### postgres.js
 
-postgres.js has no OTel instrumentation; from 4.0 it publishes every query on the `postgres:query`
+Needs postgres.js >= 4 for query spans (the tracing channel); on 3.x `instrumentPostgres()` records nothing and the SDK logs a warning. postgres.js has no OTel instrumentation; from 4.0 it publishes every query on the `postgres:query`
 diagnostics tracing channel. `instrumentPostgres()` subscribes to it and records a CLIENT span per
 query, child of the active span: `db.system=postgresql`, `db.operation.name`, `db.namespace`,
 `server.address`/`server.port`, `db.query.summary` (operation and first table, e.g.
@@ -195,11 +229,13 @@ server and spans join the Datastores views. The algorithm is specified in
 DDL summaries name the table: `CREATE TABLE IF NOT EXISTS forms` is `CREATE TABLE forms`, `CREATE [UNIQUE] INDEX x ON forms` is
 `CREATE INDEX forms` (TEMP and VIRTUAL tables too).
 
-**`requireParent` (default true):** a query is recorded only when a span is active (a request, job or `observe` span).
-Startup DDL, migrations and polling loops run outside any span and would otherwise each become a root trace (one app start
-produced 300 of them). It applies to every datastore integration and postgres.js through the shared `DbOptions`; pass
-`{ requireParent: false }` or set `WATCHTOWER_DB_REQUIRE_PARENT=0` to record root queries again. To see a background loop,
-wrap it in `observe('poll', fn)`.
+**`requireParent`:** defaults to true when node:http server instrumentation is active (a query is recorded only under a
+request, job or `observe` span; startup DDL, migrations and polling loops would otherwise each become a root trace), and to
+false otherwise. In a queue worker (BullMQ, pg-boss) with no HTTP server there are no request spans, so queries are recorded as
+root spans. It applies to every datastore integration and postgres.js through the shared `DbOptions`; pass `{ requireParent }`
+or set `WATCHTOWER_DB_REQUIRE_PARENT=0/1` to force either way. To see a background loop in an HTTP app, wrap it in
+`observe('poll', fn)`. `instrumentPostgres()` needs `postgres@>=4` on a Node with `diagnostics_channel.tracingChannel`; otherwise
+it records nothing and logs one warning.
 
 Statement text and parameters are never recorded by default. Pass `{ queryText: true }` (or set
 `WATCHTOWER_DB_QUERY_TEXT=1`) to add `db.query.text`, which is then the literal-free text. A
@@ -294,7 +330,28 @@ with `error.type`; the error message is not recorded.
 - **Graphile Worker**: `instrumentAddJob(utils)` (or the runner from `run`) adds `_wt` to the payload.
   `wrapTaskList` runs each task in a consumer span, strips `_wt`, and instruments `helpers.addJob` so
   follow-up jobs stay in the trace. `quickAddJob` cannot be patched under ESM; use `utils.addJob`.
+- **Custom queue** (a table, Redis list, anything without an integration): `import { produce, consume } from '@watchtowerobservability/node/messaging'`.
+  `produce('orders send', { 'messaging.system': 'my-queue', 'messaging.destination.name': 'orders' }, (headers) => insertJob(data, headers))`
+  runs a PRODUCER span and hands you the `traceparent` headers to store in the job row (a `headers jsonb` column).
+  The worker does `consume('orders process', { ...same attrs }, [row.headers], () => handle(row))`: a CONSUMER span
+  linked to (and, with one carrier, a child of) the producer, so the trace runs from request to job.
+  For depth on the Queues page, record the gauge `job_queue_jobs{framework="my-queue", queue="orders", state="waiting"}` (states `waiting`, `active`, `dead`);
+  that is the metric the page and the built-in queue alerts read (`messaging.queue.depth` is read too, but the alerts ignore it).
+
 - **kafkajs**: upstream `@opentelemetry/instrumentation-kafkajs` already covers it.
+
+### Browser tunnel without Next
+
+`tunnelHandler` takes a standard `Request` and returns a `Response`, so it works in any fetch-handler framework (TanStack Start, Remix, Hono, ...):
+
+```ts
+import { tunnelHandler } from '@watchtowerobservability/node/tunnel';
+const { GET, POST } = tunnelHandler({ endpoint: process.env.WT_EDGE_URL!, basePath: '/api/wt' });
+// TanStack Start: createFileRoute('/api/wt/$')({ server: { handlers: { GET: ({ request }) => GET(request), POST: ({ request }) => POST(request) } } })
+// Hono: app.all('/api/wt/*', (c) => (c.req.method === 'GET' ? GET : POST)(c.req.raw))
+```
+
+`@watchtowerobservability/node/next` still re-exports it.
 
 ## Profiling
 
@@ -340,6 +397,17 @@ app.use(appsecMiddleware());
 
 See `docs/product/security/app-api-protection.md`.
 
+## Keys: which key goes where
+
+| Prefix | Key | Use it in | Scopes / notes |
+| --- | --- | --- | --- |
+| `wti_` | Ingest key | Servers and workers (`WT_INGEST_KEY`), the Watchtower agent | Sends traces, logs, metrics; never ship it to a browser |
+| `wtp_` | Publishable key | Browsers / RUM (browser SDK, the `/next` tunnel's `?k=`) | Public by design; limited to browser ingest and its allowed origins |
+| `wta_` | Service-account key | CI and deploy scripts (`wt-next-sourcemaps`, release and event calls, monitors-as-code) | Pick the narrowest preset: `ci:write` (releases, deployments, test runs, source maps), `events:write`, `monitors:write` |
+| `wtk_` | API key | MCP server and API clients, Grafana/Prometheus reads | `wtu_` personal access tokens and `wta_` keys also work for MCP |
+
+Secrets are shown once when created and stored only as hashes. An ingest key cannot upload source maps or write monitors; a service-account key cannot ingest telemetry.
+
 ## Configuration
 
 | Option | Env var | Default |
@@ -355,7 +423,7 @@ See `docs/product/security/app-api-protection.md`.
 | `bufferDir` | | no offline buffer (spans, logs and metrics spool to `traces/`, `logs/` and `metrics/`, 500 batches each) |
 | `logs` | `WATCHTOWER_LOGS` (`OTEL_LOGS_EXPORTER=none` also turns it off) | `on`: OTLP logs (`log()`, pino, winston) |
 | `metrics` | `WATCHTOWER_METRICS` (`OTEL_METRICS_EXPORTER=none` also turns it off) | `on`: OTLP metrics, see below |
-| `redact` | | none; runs after URL scrubbing; called for every span and log attribute, every span event's attributes (`exception.message`, `exception.stacktrace`), the span name (key `span.name`), the status message (`status.message`) and log bodies (`log.body`) |
+| `redact` | | `'strict'` (see Redaction presets); a function runs after the preset and after URL scrubbing; called for every span and log attribute, every span event's attributes (`exception.message`, `exception.stacktrace`), the span name (key `span.name`), the status message (`status.message`) and log bodies (`log.body`) |
 
 Metrics: `init` sets the global meter provider, so `metrics.getMeter('app')` (re-exported from
 `@opentelemetry/api`) records to Watchtower. A periodic reader exports to `/v1/metrics` every
@@ -366,6 +434,30 @@ Metrics: `init` sets the global meter provider, so `metrics.getMeter('app')` (re
 Examples: [`examples/basic.ts`](examples/basic.ts), [`examples/express-app`](examples/express-app/server.js).
 
 Development: `npm install`, `npm run typecheck`, `npm test` (vitest), `npm run build` (`tsc` to `dist/cjs` and `dist/esm`).
+
+### Redaction presets
+
+`redact: 'strict' | 'pii' | 'off'` (default `'strict'`) runs on span attributes, span events (so `exception.message`), span names, status messages, log bodies and log attributes before export. `strict` replaces the string value of secret-shaped keys (`authorization`, `cookie`, `set-cookie`, `password`, `secret`, `token`, `api_key`, `session`, ...) with `[redacted]`, and the URL scrubber drops query strings entirely (stricter than keeping non-secret params) and turns token-shaped path segments (UUIDs, long hex, JWTs, opaque tokens) into `:redacted`. `pii` adds emails, phone numbers, Luhn-valid card numbers and IP addresses (`[redacted:email]`, ...). `off` disables both presets and URL scrubbing. Pass a function instead to run your own hook after `strict`. The rule names mirror the gateway's (`email`, `phone`, `card`, `ipv4`, `ipv6`); the gateway applies its own rules again as a backstop, so the SDK is the first line, not the only one.
+
+### Coexisting with Sentry or another OTel setup
+
+`otel: 'auto'` (default) attaches the Watchtower exporter to the tracer provider another library already registered (a span processor on that provider) and leaves its context manager and propagator alone; `'own'` always builds and registers our own; `'attach'` is `'auto'` with a warning when there is nothing to attach to. Attached spans carry the other provider's resource, so set `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES`; `remoteSampling` is not applied. Attaching needs the provider to accept processors (`addSpanProcessor`, or the sdk-trace 2.x internal list); otherwise `init` warns and uses its own.
+
+### `init()` status
+
+`init()` returns the client, which also carries `traces`, `metrics`, `logs` (`'ok' | 'disabled' | 'blocked'`), `blocked` (OTel globals that were already registered and kept: `tracer-provider`, `context-manager`, `propagator`, `meter-provider`) and `warnings`. Log `JSON.stringify({ traces: c.traces, blocked: c.blocked, warnings: c.warnings })` at startup to see why a signal is missing.
+
+### One call per framework
+
+`instrument('nest' | 'express' | 'next' | 'bullmq' | 'pg' | 'postgres' | 'ioredis')` after `init()` applies the right instrumentation and returns what it enabled. `nest`/`express` turn on node:http server spans, renamed `METHOD /route/:param` from the matched Express route (Nest on its Express adapter; Fastify routes come from the `/fastify` integration; `WT_ROUTE_NAMES=0` keeps the bare `METHOD`). `bullmq` and `postgres` patch classes or a diagnostics channel and work in any order. `pg` and `ioredis` use the OTel instrumentation, which hooks `require`, so call them (or `init` with `instrument`) before the first import of `pg` / `ioredis`; the `/register` preload does that for you.
+
+### Datastore spans without a parent
+
+With `requireParent` on, a query run outside any span is dropped. Each drop increments the counter `wt.sdk.db.dropped_spans` (exported with the SDK's metrics, readable in-process with `droppedDbSpans()`) and the first one logs a diag warning; a rising count means work (a cron, a worker) runs outside `observe`/a request span.
+
+### Release detection order
+
+`release` option, `WT_RELEASE`, `service.version` in `OTEL_RESOURCE_ATTRIBUTES`, the CI commit variables, the build stamp `WT_BUILD_STAMP` (then `BUILD_STAMP`; set it in your Dockerfile with `ARG`/`ENV`), then the commit `.git/HEAD` points at (searched upward from the working directory; plain file reads, loose ref or `packed-refs`, worktrees followed).
 
 ## Test reporters and resumable evals
 

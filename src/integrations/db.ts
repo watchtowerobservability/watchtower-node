@@ -2,7 +2,7 @@
 // statement hash and N+1 hint, connection-pool metrics and embedded-store gauges.
 import * as fs from 'node:fs';
 import * as nodePath from 'node:path';
-import { context, createContextKey, INVALID_SPAN_CONTEXT, metrics, trace, SpanKind, SpanStatusCode } from '@opentelemetry/api';
+import { context, createContextKey, diag, INVALID_SPAN_CONTEXT, metrics, trace, SpanKind, SpanStatusCode } from '@opentelemetry/api';
 import type { Attributes, BatchObservableResult, Context, Counter, Histogram, Meter, Span, TimeInput } from '@opentelemetry/api';
 import { isPgDialect, normalizeAndHash, querySummary } from '../sql.js';
 
@@ -12,8 +12,7 @@ export interface DbOptions {
   /** Flag a statement run more than this many times under one parent span. Default:
    * `WATCHTOWER_DB_N_PLUS_ONE` or 5; 0 turns it off. */
   nPlusOne?: number;
-  /** Record a query only when a span is active (a request, job or `observe` span). Default true (`WATCHTOWER_DB_REQUIRE_PARENT=0`
-   * turns it off): startup DDL, migrations and polling loops run outside any span and would otherwise each become a root trace. */
+  /** Record a query only when a span is active (a request, job or `observe` span). Default: true when HTTP server instrumentation is active, else false (`WATCHTOWER_DB_REQUIRE_PARENT=0/1` overrides): startup DDL, migrations and polling loops run outside any span and would otherwise each become a root trace. */
   requireParent?: boolean;
 }
 
@@ -52,11 +51,34 @@ function repeats(parent: string, key: string): number {
   return n;
 }
 
+let httpServerActive = false;
+/** Set by `init()`: whether node:http server instrumentation is on (requests then give queries a parent span). */
+export const setHttpServerActive = (v: boolean) => { httpServerActive = v; };
+/** Explicit option, then `WATCHTOWER_DB_REQUIRE_PARENT`, else only when HTTP server instrumentation is active (a queue worker has no request spans, so its queries become root spans). */
+export function dbRequireParent(opt: boolean | undefined): boolean {
+  if (opt !== undefined) return opt;
+  const e = (process.env.WATCHTOWER_DB_REQUIRE_PARENT || '').trim().toLowerCase();
+  if (['0', 'false', 'off', 'no'].includes(e)) return false;
+  if (['1', 'true', 'on', 'yes'].includes(e)) return true;
+  return httpServerActive;
+}
+
+let droppedSpans = 0;
+let droppedCounter: { add(n: number): void } | undefined;
+/** Datastore spans dropped so far because `requireParent` found no active parent span. */
+export const droppedDbSpans = (): number => droppedSpans;
+/** Count a dropped span: the `wt.sdk.db.dropped_spans` counter (exported with the SDK's metrics) and one diag warning. */
+function dropped(): Span {
+  if (droppedSpans++ === 0) diag.warn('watchtower: a datastore span was dropped because it has no parent span (requireParent); counted in wt.sdk.db.dropped_spans. Set WATCHTOWER_DB_REQUIRE_PARENT=0 to keep such queries as root spans');
+  droppedCounter ??= metrics.getMeter('watchtower').createCounter('wt.sdk.db.dropped_spans', { description: 'Datastore spans dropped for lack of a parent span (requireParent)' });
+  droppedCounter.add(1);
+  return trace.wrapSpanContext(INVALID_SPAN_CONTEXT);
+}
+
 /** A CLIENT span for `op` (not made active): summary, hash, N+1 hint. Prefer `traced`. */
 export function startDbSpan(op: DbOp, opts: DbOptions | undefined, parent: Context, startTime?: TimeInput): Span {
   const p = trace.getSpan(parent)?.spanContext();
-  const requireParent = opts?.requireParent ?? !['0', 'false', 'off', 'no'].includes((process.env.WATCHTOWER_DB_REQUIRE_PARENT || '').trim().toLowerCase());
-  if (requireParent && !(p && trace.isSpanContextValid(p))) return trace.wrapSpanContext(INVALID_SPAN_CONTEXT); // non-recording: nothing is exported
+  if (dbRequireParent(opts?.requireParent) && !(p && trace.isSpanContextValid(p))) return dropped(); // non-recording: nothing is exported
   const attrs: Attributes = { 'db.system.name': op.system, ...op.attributes };
   let { operation, collection } = op;
   let name = [operation, collection].filter(Boolean).join(' ') || op.system;

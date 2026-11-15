@@ -1,6 +1,8 @@
 import { context, propagation, trace, SpanKind, SpanStatusCode } from '@opentelemetry/api';
 import type { Attributes, Span } from '@opentelemetry/api';
 import { CONTEXT_KEY, injectData as inject, isPlainObject } from './messaging.js';
+import { captureException } from '../errors.js';
+import { monitorJob, slugify } from '../cron/monitor.js';
 
 export { CONTEXT_KEY };
 
@@ -9,7 +11,7 @@ interface JobLike {
   name: string;
   data: unknown;
   attemptsMade?: number;
-  opts?: { delay?: number };
+  opts?: { delay?: number; attempts?: number; repeat?: { pattern?: string; cron?: string; tz?: string } };
 }
 type Fn = (this: { name: string }, ...a: any[]) => Promise<any>;
 interface BullMQLike {
@@ -26,11 +28,11 @@ const base = (queue: string, op: 'send' | 'process', name: string): Attributes =
   'messaging.operation.name': name,
 });
 
-async function run<T>(span: Span, fn: () => Promise<T>): Promise<T> {
+async function run<T>(span: Span, fn: () => Promise<T>, recorded?: () => boolean): Promise<T> {
   try {
     return await fn();
   } catch (e) {
-    span.recordException(e as Error);
+    if (!recorded?.()) span.recordException(e as Error);
     span.setStatus({ code: SpanStatusCode.ERROR, message: (e as Error)?.message });
     throw e;
   } finally {
@@ -38,15 +40,22 @@ async function run<T>(span: Span, fn: () => Promise<T>): Promise<T> {
   }
 }
 
+export interface BullMQOptions {
+  /** Report a job's failure as an error when it is the last attempt (no retry left): queue, job name and id, attempt, attemptsMade and attempts as attributes. */
+  captureFailures?: boolean;
+  /** Run repeatable jobs (`repeat.pattern`/`cron`) as cron monitors named `<queue>-<job name>`; needs the `ingest:checkins` key scope. */
+  cronMonitors?: boolean;
+}
+
 /**
  * `import * as bullmq from 'bullmq'; instrumentBullMQ(bullmq)` (ESM or CJS): PRODUCER spans on
  * `Queue.add`/`addBulk`, CONSUMER spans around each job a `Worker` processes, parented by the
  * producer's context carried in job data under `_wt` (stripped before your processor runs; object
  * data only). Call it once, before creating queues and workers. Returns false when this bullmq
- * has no `Worker.callProcessJob` (consumer spans off; producer spans still on).
+ * has no `Worker.callProcessJob` (consumer spans off; producer spans still on). Options: see `BullMQOptions`.
  * shortcut: sandboxed (file path) processors run in a child process and get no consumer span.
  */
-export function instrumentBullMQ(bullmq: BullMQLike): boolean {
+export function instrumentBullMQ(bullmq: BullMQLike, options: BullMQOptions = {}): boolean {
   const q = bullmq.Queue.prototype;
   const w = bullmq.Worker.prototype;
   if (q[PATCHED]) return typeof w.callProcessJob === 'function';
@@ -88,8 +97,30 @@ export function instrumentBullMQ(bullmq: BullMQLike): boolean {
     };
     if (job.id) attrs['messaging.message.id'] = job.id;
     if (job.opts?.delay) attrs['messaging.bullmq.job.delay_ms'] = job.opts.delay;
-    return tracer().startActiveSpan(`process ${this.name}`, { kind: SpanKind.CONSUMER, attributes: attrs }, parent, (span) =>
-      run(span, () => call.call(this, job, ...rest)));
+    const queue = this.name;
+    const rep = job.opts?.repeat;
+    const cron = options.cronMonitors ? rep?.pattern ?? rep?.cron : undefined;
+    return tracer().startActiveSpan(`process ${queue}`, { kind: SpanKind.CONSUMER, attributes: attrs }, parent, (span) => {
+      let recorded = false;
+      const exec = async () => {
+        try {
+          return await call.call(this, job, ...rest);
+        } catch (e) {
+          const attempts = job.opts?.attempts ?? 1;
+          const made = (job.attemptsMade ?? 0) + 1;
+          if (options.captureFailures && (made >= attempts || (e as Error)?.name === 'UnrecoverableError')) {
+            captureException(e, { attributes: {
+              'bullmq.queue': queue, 'bullmq.job.name': job.name, 'bullmq.job.id': job.id, 'bullmq.job.attempt': made,
+              'bullmq.job.attempts_made': made, 'bullmq.job.attempts': attempts,
+            } });
+            recorded = true;
+          }
+          throw e;
+        }
+      };
+      const slug = cron ? slugify(`${queue}-${job.name}`) : '';
+      return run(span, () => (slug ? monitorJob(slug, exec, { schedule: cron, timezone: rep?.tz }) : exec()), () => recorded);
+    });
   };
   return true;
 }

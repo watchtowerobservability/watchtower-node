@@ -1,4 +1,4 @@
-// Continuous CPU profiler on V8's own sampler (`node:inspector`, no native addon): every
+// Continuous CPU (and opt-in heap) profiler on V8's own samplers (`node:inspector`, no native addon): every
 // `periodMs` the CPU profile is folded into stacks, encoded as pprof and posted to the gateway's
 // `/v1/profiles?format=pprof` with `service` and `version`. Best effort: a failed upload is
 // counted and dropped. `withSpan` labels samples taken while its function runs, joined
@@ -7,7 +7,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { Session } from 'node:inspector';
 import { promiseHooks } from 'node:v8';
 import { trace } from '@opentelemetry/api';
-import { foldedToPprof } from './pprof.js';
+import { foldedToPprof, heapToPprof } from './pprof.js';
 
 export interface CallFrame {
   functionName: string;
@@ -120,7 +120,31 @@ function prefixAt(sorted: SpanInterval[], t: number): string {
   return '';
 }
 
+/** V8's sampling heap profile: a tree of live (not yet collected) sampled allocations. */
+export interface HeapProfileNode {
+  callFrame: CallFrame;
+  selfSize: number;
+  id: number;
+  children?: HeapProfileNode[];
+}
+export interface HeapProfile {
+  head: HeapProfileNode;
+  samples?: { size: number; nodeId: number; ordinal: number }[];
+}
+
+export type ProfileType = 'cpu' | 'heap';
+
+/** `cpu,heap` (WT_PROFILING_TYPES) to types; unknown names are ignored, nothing valid means cpu only. */
+export function parseProfilingTypes(v?: string): ProfileType[] {
+  const t = [...new Set((v ?? '').split(',').map((x) => x.trim().toLowerCase()))].filter((x): x is ProfileType => x === 'cpu' || x === 'heap');
+  return t.length ? t : ['cpu'];
+}
+
 export interface ProfilerOptions {
+  /** Profile types (default: WT_PROFILING_TYPES, else `['cpu']`). `heap` adds V8's sampling heap profiler. */
+  types?: ProfileType[];
+  /** Heap sampling interval in bytes (default 524 288). */
+  heapIntervalBytes?: number;
   /** Ingest key; defaults to WT_INGEST_KEY. */
   apiKey?: string;
   /** Gateway base URL; defaults to WT_OTLP_ENDPOINT or http://localhost:4318. */
@@ -174,6 +198,27 @@ export function foldProfile(p: CpuProfile, spans: SpanInterval[] = []): Map<stri
   return counts;
 }
 
+/**
+ * Root-first stacks of live heap with `[objects, bytes]`: bytes are the node's self size, objects the
+ * number of sampled allocations that still live in it (at least 1 for a node with bytes).
+ */
+export function foldHeap(p: HeapProfile): Map<string, [number, number]> {
+  const objs = new Map<number, number>();
+  for (const x of p.samples ?? []) objs.set(x.nodeId, (objs.get(x.nodeId) ?? 0) + 1);
+  const out = new Map<string, [number, number]>();
+  const walk = (n: HeapProfileNode, path: string[]): void => {
+    const names = n.callFrame.functionName === '(root)' ? path : [...path, frameName(n.callFrame)];
+    if (n.selfSize > 0 && names.length && names.length <= MAX_DEPTH) {
+      const key = names.join(';');
+      const cur = out.get(key) ?? [0, 0];
+      out.set(key, [cur[0] + Math.max(objs.get(n.id) ?? 0, 1), cur[1] + n.selfSize]);
+    }
+    for (const c of n.children ?? []) walk(c, names);
+  };
+  walk(p.head, []);
+  return out;
+}
+
 export function foldedBody(counts: Map<string, number>): string {
   let out = '';
   for (const [k, n] of counts) out += `${k} ${n}\n`;
@@ -208,6 +253,8 @@ export class Profiler {
   private readonly tags: Record<string, string | undefined>;
   private readonly intervalUs: number;
   private readonly periodMs: number;
+  private readonly types: ProfileType[];
+  private readonly heapIntervalBytes: number;
   private session?: Session;
   private timer?: NodeJS.Timeout;
   private from = 0;
@@ -221,6 +268,8 @@ export class Profiler {
     this.tags = { env: process.env.WT_ENVIRONMENT, version: process.env.WT_RELEASE, ...o.tags };
     this.intervalUs = Math.min(Math.max(o.intervalUs ?? 10_000, 1_000), 1_000_000);
     this.periodMs = Math.max(o.periodMs ?? 60_000, 1_000);
+    this.types = o.types?.length ? o.types : parseProfilingTypes(process.env.WT_PROFILING_TYPES);
+    this.heapIntervalBytes = Math.max(o.heapIntervalBytes ?? 524_288, 1024);
     if (o.asyncSpans) enableAsyncSpanLabels();
   }
 
@@ -239,9 +288,14 @@ export class Profiler {
     if (this.session) return this;
     this.session = new Session();
     this.session.connect();
-    await this.post('Profiler.enable');
-    await this.post('Profiler.setSamplingInterval', { interval: this.intervalUs });
-    await this.post('Profiler.start');
+    if (this.types.includes('cpu')) {
+      await this.post('Profiler.enable');
+      await this.post('Profiler.setSamplingInterval', { interval: this.intervalUs });
+      await this.post('Profiler.start');
+    }
+    if (this.types.includes('heap')) {
+      await this.post('HeapProfiler.startSampling', { samplingInterval: this.heapIntervalBytes });
+    }
     this.from = Date.now() / 1000;
     this.timer = setInterval(() => void this.flush(true), this.periodMs);
     this.timer.unref();
@@ -252,19 +306,34 @@ export class Profiler {
   async flush(restart: boolean): Promise<void> {
     if (!this.session) return;
     const until = Date.now() / 1000;
-    const { profile } = await this.post<{ profile: CpuProfile }>('Profiler.stop');
     const from = this.from;
-    if (restart) {
-      await this.post('Profiler.start');
-      this.from = until;
+    let heap: Map<string, [number, number]> | undefined;
+    if (this.types.includes('heap')) {
+      // live-heap snapshot; sampling keeps running
+      const { profile } = await this.post<{ profile: HeapProfile }>('HeapProfiler.getSamplingProfile');
+      heap = foldHeap(profile);
     }
-    const counts = foldProfile(profile, takeIntervals(nowUs()));
-    if (counts.size) await this.upload(counts, from, until);
+    let counts: Map<string, number> | undefined;
+    if (this.types.includes('cpu')) {
+      const { profile } = await this.post<{ profile: CpuProfile }>('Profiler.stop');
+      if (restart) await this.post('Profiler.start');
+      counts = foldProfile(profile, takeIntervals(nowUs()));
+    }
+    if (restart) this.from = until;
+    if (counts?.size) await this.upload(counts, from, until);
+    if (heap?.size) await this.uploadHeap(heap, from, until);
+  }
+
+  async uploadHeap(stacks: Map<string, [number, number]>, fromS: number, untilS: number): Promise<void> {
+    await this.send(heapToPprof(stacks, this.heapIntervalBytes, fromS * 1000, (untilS - fromS) * 1000));
   }
 
   async upload(counts: Map<string, number>, fromS: number, untilS: number): Promise<void> {
+    await this.send(foldedToPprof(counts, this.intervalUs * 1000, fromS * 1000, (untilS - fromS) * 1000));
+  }
+
+  private async send(body: Uint8Array): Promise<void> {
     try {
-      const body = foldedToPprof(counts, this.intervalUs * 1000, fromS * 1000, (untilS - fromS) * 1000);
       const r = await fetch(profilesUrl(this.endpoint, this.service, this.tags.version), {
         method: 'POST', body,
         headers: { authorization: `Bearer ${this.key}`, 'content-type': 'application/octet-stream' },
@@ -280,6 +349,7 @@ export class Profiler {
   async stop(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
     await this.flush(false).catch(() => undefined);
+    if (this.types.includes('heap')) await this.post('HeapProfiler.stopSampling').catch(() => undefined);
     this.session?.disconnect();
     this.session = undefined;
   }

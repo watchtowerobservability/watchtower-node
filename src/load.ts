@@ -1,13 +1,18 @@
 // Optional-peer loader (same source for the CommonJS and ESM builds).
 import { createRequire } from 'node:module';
+import nodePath from 'node:path';
 
 // Bundlers must NOT follow this: an optional peer the app did not install would make webpack warn "Module not found",
 // and a bare require call on a variable id is a "Critical dependency" warning. createRequire() is opaque to webpack/esbuild/Next's tracer,
 // so peers resolve at run time from the SDK's own location, then from the app root (cwd). Install the peers in the app
 // (pnpm: as direct dependencies); for a Next standalone build add them to outputFileTracingIncludes.
+/** Where peers are searched, in order: the SDK's own location, the cwd, the entry script's directory (pnpm monorepo apps run from the repo root). */
+export function searchPaths(): string[] {
+  const entry = process.argv[1] ? `${nodePath.dirname(nodePath.resolve(process.argv[1]))}/` : '';
+  return [typeof __filename === 'string' ? __filename : '', `${process.cwd()}/`, entry].filter(Boolean);
+}
 function resolvers(): NodeRequire[] {
-  const from = [typeof __filename === 'string' ? __filename : '', `${process.cwd()}/`].filter(Boolean);
-  return from.map((f) => createRequire(f));
+  return searchPaths().map((f) => createRequire(f));
 }
 
 export function load(id: string): unknown {
@@ -23,7 +28,7 @@ export function load(id: string): unknown {
   throw err;
 }
 
-const SDK_PEERS = [
+export const SDK_PEERS = [
   '@opentelemetry/context-async-hooks', '@opentelemetry/core', '@opentelemetry/exporter-logs-otlp-http',
   '@opentelemetry/exporter-metrics-otlp-http', '@opentelemetry/exporter-trace-otlp-http', '@opentelemetry/otlp-transformer',
   '@opentelemetry/resources', '@opentelemetry/sdk-logs', '@opentelemetry/sdk-metrics', '@opentelemetry/sdk-trace',
@@ -39,4 +44,13 @@ export function need<T>(id: string): T {
     }
     throw e;
   }
+}
+
+export const STANDALONE_HINT = 'use withWatchtower() from @watchtowerobservability/next, or add them to serverExternalPackages and outputFileTracingIncludes in next.config';
+
+/** Required OpenTelemetry peers that cannot be loaded from the SDK's location or the app root. */
+export function missingPeers(): string[] {
+  return SDK_PEERS.filter((id) => {
+    try { load(id); return false; } catch { return true; }
+  });
 }

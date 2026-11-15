@@ -1,6 +1,10 @@
 import * as dc from 'node:diagnostics_channel';
-import { context, SpanStatusCode } from '@opentelemetry/api';
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
+import { context, diag, SpanStatusCode } from '@opentelemetry/api';
 import type { Span } from '@opentelemetry/api';
+import { load } from '../load.js';
 import { querySummary } from '../sql.js';
 import { startDbSpan } from './db.js';
 import type { DbOptions } from './db.js';
@@ -18,6 +22,15 @@ interface QueryContext {
 
 export { querySummary };
 
+let warned = false;
+// Warn once, and only when postgres is installed (load is real, but cheap: cached): without tracingChannel nothing would ever be recorded.
+function warnOnce(): void {
+  if (warned) return;
+  warned = true;
+  try { load('postgres'); } catch { return; }
+  diag.warn('watchtower: instrumentPostgres() is a no-op: this Node has no diagnostics_channel.tracingChannel; postgres@>=4 on a Node that provides it is required');
+}
+
 /**
  * postgres.js has no OTel instrumentation; since 4.0 it publishes each query on the
  * `postgres:query` diagnostics tracing channel. This turns those into CLIENT spans (child of the
@@ -26,8 +39,30 @@ export { querySummary };
  * failure. Works for ESM and CJS; returns an unsubscribe function (a no-op when this Node has no
  * tracing channels).
  */
+/** Major version of the app's installed `postgres`, or undefined when absent or unreadable. */
+export function postgresMajor(from: string = process.cwd()): number | undefined {
+  try {
+    // `postgres/package.json` is not exported, so walk up from the resolved entry.
+    let dir = dirname(createRequire(join(from, 'noop.js')).resolve('postgres'));
+    for (let i = 0; i < 6; i++, dir = dirname(dir)) {
+      try {
+        const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { name?: string; version?: string };
+        if (pkg.name === 'postgres') return Number.parseInt(pkg.version ?? '', 10);
+      } catch { /* keep walking */ }
+    }
+  } catch { /* not installed */ }
+  return undefined;
+}
+
 export function instrumentPostgres(opts?: DbOptions): () => void {
-  if (typeof dc.tracingChannel !== 'function') return () => {};
+  if (typeof dc.tracingChannel !== 'function') {
+    warnOnce();
+    return () => {};
+  }
+  const major = postgresMajor();
+  if (major !== undefined && major < 4) {
+    diag.warn(`watchtower: instrumentPostgres() records nothing with postgres@${major}: the postgres:query channel exists only in postgres@>=4`);
+  }
   const ch = dc.tracingChannel<string, QueryContext & object>('postgres:query');
   const spans = new WeakMap<object, Span>();
   const handlers = {

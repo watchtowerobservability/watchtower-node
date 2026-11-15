@@ -1,7 +1,7 @@
 import { test, expect } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { inspect } from 'node:util';
-import { trace } from '@opentelemetry/api';
+import { trace, context, SpanKind } from '@opentelemetry/api';
 import type { ReadableSpan } from '@opentelemetry/sdk-trace';
 import * as wt from '../src/index.js';
 import { installProcessHandlers } from '../src/errors.js';
@@ -150,6 +150,21 @@ test('fastify: hooks produce a span and capture 5xx', async () => {
   expect(s).toBeTruthy();
   expect(s.attributes['http.route']).toBe('/f');
   expect(named(all, 'exception')).toBeTruthy();
+});
+
+test('fastify: enriches the active http server span instead of starting a second one', async () => {
+  const hooks: Record<string, (...a: any[]) => void> = {};
+  plugin({ addHook: (n, f) => { hooks[n] = f; } }, {}, () => {});
+  const req = { method: 'GET', url: '/g/7', routeOptions: { url: '/g/:id' } };
+  const http = trace.getTracer('t').startSpan('GET', { kind: SpanKind.SERVER });
+  context.with(trace.setSpan(context.active(), http), () => hooks.onRequest!(req, {}, () => {}));
+  hooks.onResponse!(req, { statusCode: 200 }, () => {});
+  expect(http.isRecording()).toBe(true); // not ended by the plugin
+  http.end();
+  const all = (await drain()).filter((x) => x.kind === SpanKind.SERVER);
+  expect(all.length).toBe(1);
+  expect(all[0]!.name).toBe('GET /g/:id');
+  expect(all[0]!.attributes['http.route']).toBe('/g/:id');
 });
 
 test('koa and fastify capture redacted bodies only when a rule matches', async () => {
@@ -326,7 +341,7 @@ test('logs: pino stream and winston transport emit OTLP logs with trace ids', as
   const [p, w] = logs.splice(0) as [LogRecordLike, LogRecordLike];
   expect(p.severityText).toBe('ERROR');
   expect(p.body).toBe('bad thing');
-  expect(p.attributes.user).toBe('{"id":1}');
+  expect(p.attributes['user.id']).toBe(1);
   expect(p.attributes['wt.tenant_id']).toBeUndefined();
   expect(p.spanContext.traceId).toBe(span.spanContext().traceId);
   expect(w.severityText).toBe('WARN');

@@ -1,7 +1,7 @@
 import { context } from '@opentelemetry/api';
 import { captureException } from '../errors.js';
 import { capturePayload, captureActive } from '../payload.js';
-import { serverSpan, statusOf } from './util.js';
+import { adoptServerSpan, serverSpan, statusOf } from './util.js';
 import type { ServerSpan } from './util.js';
 
 const KEY = Symbol('wt.span');
@@ -29,10 +29,11 @@ export interface FastifyLike {
   addHook(name: string, fn: (...args: any[]) => void): unknown;
 }
 
-/** await app.register(plugin): server span per request plus 5xx error capture. */
+/** await app.register(plugin): server span per request (or the http instrumentation's own server span, enriched) plus 5xx error capture. */
 export function plugin(fastify: FastifyLike, _opts: unknown, done: (err?: Error) => void): void {
   fastify.addHook('onRequest', (req: FastifyRequestLike, _reply: unknown, next: () => void) => {
-    const s = serverSpan(req.method, req.url);
+    // with the http instrumentation active its server span is enriched (route, status) instead of starting a second one
+    const s = adoptServerSpan(req.method) ?? serverSpan(req.method, req.url);
     req[KEY] = s;
     context.with(s.ctx, next);
   });

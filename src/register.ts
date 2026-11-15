@@ -1,9 +1,10 @@
 // Preload entry: `node --import @watchtowerobservability/node/register app.mjs` (ESM) or `node -r @watchtowerobservability/node/register app.js` (CommonJS).
 // Starts the SDK from WT_*/OTEL_* env before the app loads, so http, fetch, pg and ioredis are patched in time.
-// No-op without WT_INGEST_KEY.
+// Without WT_INGEST_KEY it starts nothing and says so.
 import { pathToFileURL } from 'node:url';
 import { register as registerHooks } from 'node:module';
-import { init } from './index.js';
+import { init, setOffReason } from './index.js';
+import { searchPaths } from './load.js';
 
 if (process.env.WT_INGEST_KEY || process.env.OTEL_EXPORTER_OTLP_HEADERS) {
   try {
@@ -21,15 +22,25 @@ if (process.env.WT_INGEST_KEY || process.env.OTEL_EXPORTER_OTLP_HEADERS) {
         return (emit as (...x: unknown[]) => void).call(process, w, ...a);
       }) as typeof process.emitWarning;
       try {
-        registerHooks('@opentelemetry/instrumentation/hook.mjs', pathToFileURL(`${process.cwd()}/`));
-      } catch {
-        // @opentelemetry/instrumentation not installed: CommonJS apps are still instrumented
+        // same search order as the peers: SDK location, cwd, entry script directory; the first that resolves wins
+        // (none: @opentelemetry/instrumentation not installed, CommonJS apps are still instrumented)
+        for (const p of searchPaths()) {
+          try {
+            // .ts/.tsx (tsx, ts-node): the hook would re-parse their TypeScript source as JS and fail once per file.
+            registerHooks('@opentelemetry/instrumentation/hook.mjs', pathToFileURL(p), { data: { exclude: [/\.[cm]?tsx?(?:[?#]|$)/] } });
+            break;
+          } catch { /* try the next location */ }
+        }
       } finally {
         process.emitWarning = emit;
       }
     }
     init({});
   } catch (e) {
-    console.warn(`[watchtower] register: ${(e as Error).message}`);
+    setOffReason(`the preload could not start the SDK (${(e as Error).message})`);
+    console.warn(`[watchtower] telemetry is OFF: register failed: ${(e as Error).message}`);
   }
+} else {
+  setOffReason('WT_INGEST_KEY is not set');
+  if (process.env.NODE_ENV !== 'test') console.warn('[watchtower] telemetry is OFF: WT_INGEST_KEY is not set, so the register preload started nothing');
 }

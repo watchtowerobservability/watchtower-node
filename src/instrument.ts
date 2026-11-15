@@ -2,6 +2,10 @@
 import { load } from './load.js';
 import { instrumentBetterSqlite3 } from './integrations/sqlite.js';
 import { instrumentPostgres } from './integrations/postgres.js';
+import { routeNamer } from './integrations/util.js';
+
+/** Instrumentation packages already registered in this process (by `init` or `instrument()`), so none is patched twice. */
+export const registered = new Set<string>();
 
 interface Providers { tracerProvider: unknown; meterProvider?: unknown }
 
@@ -9,7 +13,8 @@ const ENTRIES: { pkg: string; ctor: string; opts: (self: URL[]) => object; auto?
   {
     pkg: '@opentelemetry/instrumentation-http', ctor: 'HttpInstrumentation',
     // our own exports and API calls must not become spans
-    opts: (self) => ({ ignoreOutgoingRequestHook: (r: { hostname?: string; host?: string; port?: string | number }) =>
+    // routeNamer: server spans become `GET /users/:id` from the matched Express / Nest route (http alone names them just `GET`)
+    opts: (self) => ({ applyCustomAttributesOnSpan: routeNamer, ignoreOutgoingRequestHook: (r: { hostname?: string; host?: string; port?: string | number }) =>
       self.some((u) => (r.hostname || r.host) === u.hostname && String(r.port ?? (u.protocol === 'https:' ? 443 : 80)) === String(u.port || (u.protocol === 'https:' ? 443 : 80))) }),
   },
   {
@@ -20,6 +25,21 @@ const ENTRIES: { pkg: string; ctor: string; opts: (self: URL[]) => object; auto?
   { pkg: '@opentelemetry/instrumentation-ioredis', ctor: 'IORedisInstrumentation', opts: () => ({}) },
   { pkg: '@opentelemetry/instrumentation-mysql2', ctor: 'MySQL2Instrumentation', opts: () => ({}), auto: true },
 ];
+
+/** Register one entry by package name (for `instrument(name)`); false when already registered or not installed. Uses the global providers. */
+export function instrumentOne(pkg: string, selfUrls: string[] = []): boolean {
+  const e = ENTRIES.find((x) => x.pkg === pkg);
+  if (!e || registered.has(pkg)) return false;
+  const self = selfUrls.flatMap((u) => { try { return [new URL(u)]; } catch { return []; } });
+  try {
+    const { registerInstrumentations } = load('@opentelemetry/instrumentation') as { registerInstrumentations: (o: object) => () => void };
+    const Ctor = (load(pkg) as Record<string, new (o: object) => object>)[e.ctor];
+    if (!Ctor) return false;
+    registerInstrumentations({ instrumentations: [new Ctor(e.opts(self))] });
+    registered.add(pkg);
+    return true;
+  } catch { return false; } // peer not installed
+}
 
 /** Drivers patched in place (no OTel package): `instrument: 'auto'` only. Each loads the app's installed copy or is skipped. */
 const DRIVERS: { name: string; run: () => void }[] = [
@@ -45,7 +65,7 @@ export function instrumentAll(p: Providers, selfUrls: string[], auto = false): s
     if (e.auto && !auto) continue;
     try {
       const Ctor = (load(e.pkg) as Record<string, new (o: object) => object>)[e.ctor];
-      if (Ctor) { found.push(new Ctor(e.opts(self))); names.push(e.pkg); }
+      if (Ctor) { found.push(new Ctor(e.opts(self))); names.push(e.pkg); registered.add(e.pkg); }
     } catch {
       // package not installed (or failed to construct): skip it, never break init
     }

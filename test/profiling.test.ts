@@ -1,9 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { inspect } from 'node:util';
 import { Session } from 'node:inspector';
 import { gunzipSync } from 'node:zlib';
-import { Profiler, enableAsyncSpanLabels, foldProfile, foldedBody, ingestUrl, profilesUrl, takeIntervals, withSpan } from '../src/profiling.js';
-import { foldedToPprof } from '../src/pprof.js';
+import { Profiler, enableAsyncSpanLabels, foldHeap, foldProfile, foldedBody, ingestUrl, parseProfilingTypes, profilesUrl, takeIntervals, withSpan } from '../src/profiling.js';
+import { foldedToPprof, heapToPprof } from '../src/pprof.js';
 import { init } from '../src/index.js';
 
 const f = (functionName: string, url = '', lineNumber = 0) => ({ functionName, url, lineNumber });
@@ -132,6 +132,57 @@ describe('pprof upload', () => {
     expect(f.filter(([n]) => n === 5)).toHaveLength(2); // functions: main, work
     expect(f.find(([n]) => n === 9)![1]).toBe(1_700_000_000_000_000_000n);
     expect(f.find(([n]) => n === 12)![1]).toBe(10_000_000n);
+  });
+
+  it('folds a fake V8 sampling heap profile and encodes inuse_objects / inuse_space', () => {
+    const stacks = foldHeap({
+      head: {
+        id: 1, selfSize: 0, callFrame: f('(root)'), children: [
+          { id: 2, selfSize: 4096, callFrame: f('main', 'file:///app/a.js', 0), children: [{ id: 3, selfSize: 1024, callFrame: f('alloc', 'file:///app/a.js', 4) }] },
+          { id: 4, selfSize: 0, callFrame: f('empty') },
+        ],
+      },
+      samples: [{ size: 512, nodeId: 2, ordinal: 1 }, { size: 512, nodeId: 2, ordinal: 2 }],
+    });
+    expect([...stacks]).toEqual([['main (a.js:1)', [2, 4096]], ['main (a.js:1);alloc (a.js:5)', [1, 1024]]]); // no samples: at least 1 object
+    const gz = heapToPprof(stacks, 524_288, 1_700_000_000_000, 60_000);
+    const g = (n: number, fs: [number, Uint8Array | bigint][]) => fs.filter(([k]) => k === n);
+    const top = fields(gunzipSync(gz));
+    const strs = top.filter(([n]) => n === 6).map(([, v]) => Buffer.from(v as Uint8Array).toString());
+    expect(strs).toEqual(expect.arrayContaining(['inuse_objects', 'inuse_space', 'count', 'bytes', 'space']));
+    expect(strs).not.toContain('cpu');
+    expect(g(1, top)).toHaveLength(2); // sample types
+    expect(g(2, top)).toHaveLength(2); // samples
+    expect(top.find(([n]) => n === 12)![1]).toBe(524_288n);
+  });
+
+  it('parses profile types from WT_PROFILING_TYPES', () => {
+    expect(parseProfilingTypes(undefined)).toEqual(['cpu']);
+    expect(parseProfilingTypes('cpu,heap')).toEqual(['cpu', 'heap']);
+    expect(parseProfilingTypes(' Heap , heap,wall')).toEqual(['heap']);
+    expect(parseProfilingTypes('wall')).toEqual(['cpu']);
+  });
+
+  it('a heap-only profiler uploads a live heap pprof', async () => {
+    const bodies: Uint8Array[] = [];
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation((_u, init) => {
+      bodies.push(init!.body as Uint8Array);
+      return Promise.resolve(new Response(null, { status: 202 }));
+    });
+    const p = new Profiler({ apiKey: 'k', endpoint: 'http://gw', service: 'svc', types: ['heap'], heapIntervalBytes: 1024 });
+    try {
+      await p.start();
+      const keep: object[] = [];
+      for (let i = 0; i < 20_000; i++) keep.push({ i, s: 'x'.repeat(32) });
+      await p.flush(false);
+      expect(p.uploaded).toBe(1);
+      const strs = fields(gunzipSync(bodies[0]!)).filter(([n]) => n === 6).map(([, v]) => Buffer.from(v as Uint8Array).toString());
+      expect(strs).toEqual(expect.arrayContaining(['inuse_objects', 'inuse_space']));
+      expect(keep.length).toBe(20_000);
+    } finally {
+      await p.stop();
+      spy.mockRestore();
+    }
   });
 
   it('posts to /v1/profiles with service and version', () => {
