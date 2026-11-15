@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.6 (2026-11-15)
+
+- Next.js: `withWatchtower` now keeps every OpenTelemetry instrumentation package the SDK loads (`instrumentation-http`, `-undici`, `-runtime-node`, `-pg`, `-mysql2`, `-ioredis`) in `serverExternalPackages`. Bundled, they extended an undefined `InstrumentationBase` and a standalone build failed every request with `Class extends value undefined`. A test keeps the list in step with `package.json`.
+- Next.js next to Sentry: when `@sentry/nextjs` or `@sentry/node` is in the app's `package.json` (or `sentry: true`), `withWatchtower` no longer externalises `@opentelemetry/api` and `@opentelemetry/instrumentation`. Sentry's nested OTel copies stay bundled and imported them; externalised, its bundled `HttpInstrumentation` extended `undefined` and every request failed in the instrumentation hook.
+
 ## 0.7.5 (2026-11-15)
 
 - Telemetry that is off is now visible: the `register` preload prints `[watchtower] telemetry is OFF: <reason>` when `WT_INGEST_KEY` is unset or the SDK cannot start, and the first helper call that is dropped (`log`, `observe`, `checkin` ...) prints it once more with the reason.
@@ -32,8 +37,6 @@
 - `service.version` also falls back to the first set of `GITHUB_SHA`, `CI_COMMIT_SHA`, `VERCEL_GIT_COMMIT_SHA`, `SOURCE_VERSION`, `BUILD_SHA`, `RENDER_GIT_COMMIT`, `HEROKU_SLUG_COMMIT` (after `release`, `WT_RELEASE` and `OTEL_RESOURCE_ATTRIBUTES`; empty and `unknown` are ignored).
 - Behaviour change: datastore `requireParent` now defaults to true only when HTTP server instrumentation is active, so queue workers (BullMQ) record their queries as root spans. `WATCHTOWER_DB_REQUIRE_PARENT=0/1` still overrides.
 - `instrumentPostgres()` logs one warning when `postgres` is installed but `diagnostics_channel.tracingChannel` is unavailable (needs `postgres@>=4`).
-
-## 0.7.5
 
 - `wt-next-sourcemaps` / `uploadSourcemaps()` send the maps in one `POST /v1/projects/{prj}/artifacts/bundle?release=` request per ~120 MB (tar.gz plus a manifest) instead of one request per map. A server without the bundle route is detected and the batch falls back to the concurrent, gzipped single uploads (429/5xx retried with backoff). The final line is still `{uploaded, skipped, failed}`; a failed map is logged with its reason. Re-posting the same bytes returns 200 and counts as `skipped`.
 

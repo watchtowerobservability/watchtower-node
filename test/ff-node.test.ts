@@ -263,3 +263,24 @@ test('uploadSourcemaps inject: writes debug ids into chunk and map, sends debug_
   await run();
   expect(fs.readFileSync(js, 'utf8')).toBe(before);
 });
+
+test('withWatchtower keeps every @opentelemetry package the SDK loads external (B9b)', () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')) as Record<string, Record<string, string> | undefined>;
+  const otel = [...new Set(['dependencies', 'peerDependencies', 'optionalDependencies'].flatMap((k) => Object.keys(pkg[k] ?? {})))].filter((n) => n.startsWith('@opentelemetry/'));
+  const ext = (withWatchtower({}) as { serverExternalPackages: string[] }).serverExternalPackages;
+  expect(otel.filter((n) => !ext.includes(n))).toEqual([]);
+});
+
+test('withWatchtower next to Sentry keeps the OTel packages Sentry shares bundled (B9b)', async () => {
+  const { externalPackages, hasSentry } = await import('../src/integrations/next-build.js');
+  expect(externalPackages(false)).toContain('@opentelemetry/api');
+  const s = externalPackages(true);
+  expect(s).not.toContain('@opentelemetry/api');
+  expect(s).not.toContain('@opentelemetry/instrumentation');
+  expect(s).toContain('@opentelemetry/instrumentation-http');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-sentry-'));
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ dependencies: { '@sentry/nextjs': '^9' } }));
+  expect(hasSentry(dir)).toBe(true);
+  expect(hasSentry(fs.mkdtempSync(path.join(os.tmpdir(), 'wt-nosentry-')))).toBe(false);
+  expect((withWatchtower({}, { sentry: true }) as { serverExternalPackages: string[] }).serverExternalPackages).not.toContain('@opentelemetry/api');
+});

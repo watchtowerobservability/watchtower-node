@@ -36,16 +36,41 @@ export interface WatchtowerNextOptions {
   sourcemaps?: boolean | (Omit<SourcemapOptions, 'keep' | 'release'> & { upload?: boolean; deleteAfterUpload?: boolean });
   /** Release: injected as `NEXT_PUBLIC_WT_RELEASE` (read by `<WatchtowerRUM>`). Default WT_RELEASE, then the git sha of the CI/host env. */
   release?: string;
+  /** Sentry is in the app (default: `@sentry/nextjs` or `@sentry/node` in package.json): keep the OTel packages it shares bundled. */
+  sentry?: boolean;
 }
 
 // what the node SDK loads at run time through createRequire (invisible to Next's file tracer): see src/load.ts
 const OTEL = [
   '@opentelemetry/api', '@opentelemetry/context-async-hooks', '@opentelemetry/core', '@opentelemetry/exporter-logs-otlp-http',
   '@opentelemetry/exporter-metrics-otlp-http', '@opentelemetry/exporter-trace-otlp-http', '@opentelemetry/instrumentation',
+  // every instrumentation too, so none of ours is bundled against an external base class
+  '@opentelemetry/instrumentation-http', '@opentelemetry/instrumentation-ioredis', '@opentelemetry/instrumentation-mysql2',
+  '@opentelemetry/instrumentation-pg', '@opentelemetry/instrumentation-runtime-node', '@opentelemetry/instrumentation-undici',
   '@opentelemetry/otlp-transformer', '@opentelemetry/resources', '@opentelemetry/sdk-logs', '@opentelemetry/sdk-metrics',
   '@opentelemetry/sdk-trace',
 ];
 const EXTERNAL = ['@watchtowerobservability/node', ...OTEL];
+// Packages Sentry's own nested OTel copies import. Sentry stays bundled, so externalising these made its bundled
+// `HttpInstrumentation` extend an `InstrumentationBase` that resolved to undefined (B9b). With Sentry present they stay
+// bundled for Sentry, while ours (external) still resolve them from node_modules at run time.
+const SHARED_WITH_SENTRY = new Set(['@opentelemetry/api', '@opentelemetry/instrumentation']);
+
+/** Is a Sentry Node/Next SDK installed in the app being built? */
+export function hasSentry(cwd = process.cwd()): boolean {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(nodePath.join(cwd, 'package.json'), 'utf8')) as Record<string, Record<string, string> | undefined>;
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+    return Object.keys(deps).some((n) => n === '@sentry/nextjs' || n === '@sentry/node');
+  } catch {
+    return false;
+  }
+}
+
+/** The `serverExternalPackages` withWatchtower adds; `sentry` drops the packages a bundled Sentry shares. */
+export function externalPackages(sentry: boolean): string[] {
+  return sentry ? EXTERNAL.filter((n) => !SHARED_WITH_SENTRY.has(n)) : EXTERNAL;
+}
 const SHA_ENV = ['WT_RELEASE', 'GITHUB_SHA', 'CI_COMMIT_SHA', 'VERCEL_GIT_COMMIT_SHA', 'SOURCE_VERSION', 'BUILD_SHA', 'RENDER_GIT_COMMIT', 'HEROKU_SLUG_COMMIT'];
 const INCLUDE = ['@watchtowerobservability/node', '@opentelemetry'].flatMap((p) => [`./node_modules/${p}/**/*`, `./node_modules/.pnpm/${p.replace('/', '+')}*/**/*`]);
 
@@ -64,7 +89,7 @@ export function withWatchtower(config: ConfigOrFn = {}, opts: WatchtowerNextOpti
     inc['/*'] = [...new Set([...(inc['/*'] ?? []), ...INCLUDE])];
     const out: NextConfig = {
       ...c,
-      serverExternalPackages: [...new Set([...((c.serverExternalPackages as string[] | undefined) ?? []), ...EXTERNAL])],
+      serverExternalPackages: [...new Set([...((c.serverExternalPackages as string[] | undefined) ?? []), ...externalPackages(opts.sentry ?? hasSentry())])],
       outputFileTracingIncludes: inc,
     };
     if (release) out.env = { NEXT_PUBLIC_WT_RELEASE: release, ...(c.env as Record<string, string> | undefined) };
