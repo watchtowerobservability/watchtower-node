@@ -44,8 +44,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" *.tgz --generate-notes --verify-tag
-      - name: npm publish (trusted publishing over OIDC, no token)
+      - name: npm publish (provenance; trusted publishing over OIDC, NPM_TOKEN until that is configured)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
+          [ -n "$NODE_AUTH_TOKEN" ] || unset NODE_AUTH_TOKEN
           npm install -g npm@^11.5.1 --no-audit --no-fund >/dev/null
           id="$(node -p 'const p=require("./package.json"); p.name+"@"+p.version')"
           if npm view "$id" version >/dev/null 2>&1; then echo "$id already on npm"; exit 0; fi
