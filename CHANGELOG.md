@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.0 (2026-11-16)
+
+- `init()` never throws. A missing OpenTelemetry package, a missing key or any startup error logs one `[watchtower] telemetry is OFF` warning (listing every missing package and the install command), leaves every helper a no-op and returns a no-op client, so the app boots. Under pnpm this fixes the crash at the first import of `main.ts`.
+- The OpenTelemetry SDK packages (`context-async-hooks`, `core`, the three OTLP exporters, `otlp-transformer`, `resources`, `sdk-logs`, `sdk-metrics`, `sdk-trace`) are now `dependencies`, not optional peers: `pnpm add @watchtowerobservability/node` is enough. The `instrumentation-*` packages and `winston-transport` stay optional peers.
+- `@watchtowerobservability/node/next` has `edge-light`, `worker` and `browser` conditions pointing at a no-op stub with no `node:*` imports, so `export { register } from '@watchtowerobservability/node/next'` in `instrumentation.ts` builds with no bundler config.
+- Fix (ESM under pnpm): the SDK now looks for its OpenTelemetry packages from its own location in the ESM build too (it only did in CommonJS), which is where pnpm puts its dependencies.
+- Next.js standalone: the SDK names its OpenTelemetry packages literally (`tracedPackages`, never called), so Next's file tracer copies them with their pnpm links. Verified with a pnpm workspace where the app depends only on `@watchtowerobservability/node`, an edge middleware, and `.next/standalone` copied out of the project: `next build` passes and `server.js` starts with no missing-package warning.
+
 ## 0.7.9 (2026-11-16)
 
 - Fix (Next.js standalone, pnpm and monorepos; B22, WT-13): `withWatchtower` listed `node_modules/@opentelemetry/**` globs in `outputFileTracingIncludes`. Under pnpm those copied each peer as a plain folder without its own dependencies, or matched nothing when the `.pnpm` store sits at the workspace root, so `init` failed with `missing @opentelemetry/resources`. It now walks the SDK's dependency closure from the app at config time and lists each package's real store folder plus the pnpm links to it, which Next recreates as links. Verified with a pnpm workspace (`apps/web`, `outputFileTracingRoot` at the root, `output: 'standalone'`, peers as direct deps of the app, no peer imports in `instrumentation`): `server.js` starts with no missing-package warning and `wt-next-doctor` exits 0. Your own `outputFileTracingIncludes` are kept. New export: `tracingIncludes(ids, cwd)`.

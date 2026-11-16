@@ -1,6 +1,6 @@
 {
   "name": "@watchtowerobservability/node",
-  "version": "0.7.9",
+  "version": "0.8.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/watchtowerobservability/watchtower-node.git"
@@ -133,6 +133,18 @@
       }
     },
     "./next": {
+      "edge-light": {
+        "types": "./dist/esm/integrations/next-edge.d.ts",
+        "default": "./dist/esm/integrations/next-edge.js"
+      },
+      "worker": {
+        "types": "./dist/esm/integrations/next-edge.d.ts",
+        "default": "./dist/esm/integrations/next-edge.js"
+      },
+      "browser": {
+        "types": "./dist/esm/integrations/next-edge.d.ts",
+        "default": "./dist/esm/integrations/next-edge.js"
+      },
       "import": {
         "types": "./dist/esm/integrations/next.d.ts",
         "default": "./dist/esm/integrations/next.js"
@@ -425,14 +437,19 @@
     "smoke": "node scripts/smoke-pack.mjs"
   },
   "dependencies": {
-    "@opentelemetry/api": "^1.10.0"
-  },
-  "peerDependencies": {
+    "@opentelemetry/api": "^1.10.0",
     "@opentelemetry/context-async-hooks": "^3.1.0",
     "@opentelemetry/core": "^3.1.0",
     "@opentelemetry/exporter-logs-otlp-http": "^0.301.0",
     "@opentelemetry/exporter-metrics-otlp-http": "^0.301.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.301.0",
+    "@opentelemetry/otlp-transformer": "^0.301.0",
+    "@opentelemetry/resources": "^3.1.0",
+    "@opentelemetry/sdk-logs": "^3.1.0",
+    "@opentelemetry/sdk-metrics": "^3.1.0",
+    "@opentelemetry/sdk-trace": "^3.1.0"
+  },
+  "peerDependencies": {
     "@opentelemetry/instrumentation": ">=0.200.0",
     "@opentelemetry/instrumentation-http": ">=0.200.0",
     "@opentelemetry/instrumentation-ioredis": ">=0.50.0",
@@ -440,29 +457,9 @@
     "@opentelemetry/instrumentation-pg": ">=0.50.0",
     "@opentelemetry/instrumentation-runtime-node": ">=0.38.0",
     "@opentelemetry/instrumentation-undici": ">=0.10.0",
-    "@opentelemetry/otlp-transformer": "^0.301.0",
-    "@opentelemetry/resources": "^3.1.0",
-    "@opentelemetry/sdk-logs": "^3.1.0",
-    "@opentelemetry/sdk-metrics": "^3.1.0",
-    "@opentelemetry/sdk-trace": "^3.1.0",
     "winston-transport": "^4.0.0"
   },
   "peerDependenciesMeta": {
-    "@opentelemetry/context-async-hooks": {
-      "optional": true
-    },
-    "@opentelemetry/core": {
-      "optional": true
-    },
-    "@opentelemetry/exporter-logs-otlp-http": {
-      "optional": true
-    },
-    "@opentelemetry/exporter-metrics-otlp-http": {
-      "optional": true
-    },
-    "@opentelemetry/exporter-trace-otlp-http": {
-      "optional": true
-    },
     "@opentelemetry/instrumentation": {
       "optional": true
     },
@@ -484,36 +481,11 @@
     "@opentelemetry/instrumentation-undici": {
       "optional": true
     },
-    "@opentelemetry/otlp-transformer": {
-      "optional": true
-    },
-    "@opentelemetry/resources": {
-      "optional": true
-    },
-    "@opentelemetry/sdk-logs": {
-      "optional": true
-    },
-    "@opentelemetry/sdk-metrics": {
-      "optional": true
-    },
-    "@opentelemetry/sdk-trace": {
-      "optional": true
-    },
     "winston-transport": {
       "optional": true
     }
   },
   "devDependencies": {
-    "@opentelemetry/context-async-hooks": "^3.1.0",
-    "@opentelemetry/core": "^3.1.0",
-    "@opentelemetry/exporter-logs-otlp-http": "^0.301.0",
-    "@opentelemetry/exporter-metrics-otlp-http": "^0.301.0",
-    "@opentelemetry/exporter-trace-otlp-http": "^0.301.0",
-    "@opentelemetry/otlp-transformer": "^0.301.0",
-    "@opentelemetry/resources": "^3.1.0",
-    "@opentelemetry/sdk-logs": "^3.1.0",
-    "@opentelemetry/sdk-metrics": "^3.1.0",
-    "@opentelemetry/sdk-trace": "^3.1.0",
     "@types/node": "22.15.0",
     "typescript": "5.7.2",
     "vitest": "5.0.5",

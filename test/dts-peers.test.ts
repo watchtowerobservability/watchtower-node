@@ -10,8 +10,8 @@ const peers: string[] = peerSpecs(pkg);
 test('guardPeers marks every optional-peer specifier and leaves @opentelemetry/api alone', () => {
   const dts = [
     "import type { Tracer } from '@opentelemetry/api';",
-    "import type { SpanExporter } from '@opentelemetry/sdk-trace';",
-    'export type X = typeof import("@opentelemetry/sdk-logs");',
+    "import type { InstrumentationBase } from '@opentelemetry/instrumentation';",
+    'export type X = typeof import("@opentelemetry/instrumentation-pg");',
   ].join('\n');
   expect(unguarded(dts, peers)).toHaveLength(2);
   const out = guardPeers(dts, peers);

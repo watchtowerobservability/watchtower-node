@@ -7,12 +7,10 @@
 Published on npm:
 
 ```sh
-npm install @watchtowerobservability/node @opentelemetry/context-async-hooks @opentelemetry/core \
-  @opentelemetry/exporter-logs-otlp-http @opentelemetry/exporter-metrics-otlp-http @opentelemetry/exporter-trace-otlp-http \
-  @opentelemetry/otlp-transformer @opentelemetry/resources @opentelemetry/sdk-logs @opentelemetry/sdk-metrics @opentelemetry/sdk-trace
+npm install @watchtowerobservability/node   # or: pnpm add @watchtowerobservability/node
 ```
 
-`@opentelemetry/api` is the only hard dependency; the OpenTelemetry SDK packages above are optional peers (so your app controls their versions) and are loaded by `init`, which throws an error naming the missing ones.
+The OpenTelemetry SDK packages are regular dependencies, so that is enough. `init()` never throws: if a package is missing or startup fails it logs one warning, leaves telemetry off and returns a no-op client. In Next.js, `export { register } from '@watchtowerobservability/node/next'` builds with no bundler config (edge and browser builds get a no-op stub).
 
 Optional auto-instrumentation peers (installed ones are used, see below):
 `npm install @opentelemetry/instrumentation @opentelemetry/instrumentation-http @opentelemetry/instrumentation-undici @opentelemetry/instrumentation-pg @opentelemetry/instrumentation-ioredis`.
@@ -52,7 +50,7 @@ silence it with `instrumentLog: false` or `WT_INSTRUMENT_LOG=0`.
 
 Start the preload in the start command: `node --import @watchtowerobservability/node/register app.js` (or `node -r ...` for CommonJS).
 Do not use `NODE_OPTIONS=--import ...`: it leaks into healthchecks and `pnpm` itself, which cannot resolve the package from the image root.
-OpenTelemetry peers are looked up from the SDK's location, then the working directory, then the directory of the entry script, so in a pnpm
+OpenTelemetry packages are looked up from the SDK's location, then the working directory, then the directory of the entry script, so in a pnpm
 monorepo the app that runs the script is enough.
 
 `wt.checkin('nightly-report', async () => { ... })` wraps a cron or scheduler job in check-ins to the monitor with that slug
@@ -116,9 +114,9 @@ registered it re-sends the signal so the exit is unchanged. Under `next start`, 
 the server and calls `process.exit`; our flush starts first (the `register` hook runs before) and gets the time the server takes
 to close, so a very slow export can still be cut.
 
-Install the OpenTelemetry peers above in the app itself (with pnpm, as direct dependencies). The SDK loads peers at run time through `createRequire`, which webpack does not follow, so a build prints no "Module not found" warning for peers you did not install. Next's standalone file tracer does not follow them either.
+The SDK loads its OpenTelemetry packages at run time through `createRequire`, which webpack does not follow, so a build prints no "Module not found" warning for peers you did not install. Next's standalone file tracer does not follow them either.
 
-Standalone recipe: wrap the config, `module.exports = withWatchtower(nextConfig)` (from `@watchtowerobservability/node/next-build`, or `@watchtowerobservability/next`). It adds the SDK and its OpenTelemetry peers to `serverExternalPackages`, and to `outputFileTracingIncludes` each of them with its dependencies and pnpm links, resolved from the app (npm, pnpm, monorepos with `outputFileTracingRoot` at the workspace root). By hand, add the same packages to `serverExternalPackages` and import each peer literally in `instrumentation.ts`; plain `node_modules/@opentelemetry/**` include globs do not work under pnpm, since they copy each peer without its dependencies. If a peer is missing at run time, `init` logs one warning naming it; after `next build`, `npx wt-next-doctor` checks that `.next/standalone` holds the SDK and its peers and that each one loads from `server.js`, and exits 1 otherwise.
+Standalone recipe: wrap the config, `module.exports = withWatchtower(nextConfig)` (from `@watchtowerobservability/node/next-build`, or `@watchtowerobservability/next`). It adds the SDK and its OpenTelemetry packages to `serverExternalPackages`, and to `outputFileTracingIncludes` each of them with its dependencies and pnpm links, resolved from the app (npm, pnpm, monorepos with `outputFileTracingRoot` at the workspace root). By hand, add the same packages to `serverExternalPackages` and import each peer literally in `instrumentation.ts`; plain `node_modules/@opentelemetry/**` include globs do not work under pnpm, since they copy each peer without its dependencies. If a peer is missing at run time, `init` logs one warning naming it; after `next build`, `npx wt-next-doctor` checks that `.next/standalone` holds the SDK and its peers and that each one loads from `server.js`, and exits 1 otherwise.
 
 Bundling with esbuild or webpack (ESM or CommonJS output) works without warnings; mark the peers you use as externals (or ship `node_modules`), because they are resolved at run time. Declarations name optional peers behind `// @ts-ignore`, so `skipLibCheck: false` builds compile without them installed.
 

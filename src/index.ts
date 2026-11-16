@@ -484,10 +484,37 @@ function registerGlobals(c: Client): void {
     diag.warn(w);
   }
 }
+/** A Client-shaped stand-in for when telemetry cannot start: every method does nothing, observe/checkin pass the function through. */
+function offClient(): Client {
+  const fns: Record<string, unknown> = {
+    observe: (_n: string, f: unknown) => f,
+    checkin: (_s: string, f: () => unknown) => Promise.resolve().then(f),
+    log: () => undefined,
+    toJSON: () => ({}),
+    evaluate: () => Promise.resolve([]),
+    evaluateResume: () => Promise.resolve([]),
+  };
+  const plain: Record<string, unknown> = { traces: 'disabled', metrics: 'disabled', logs: 'disabled', blocked: [], warnings: [], attached: false };
+  return new Proxy({}, { get: (_t, k) => (typeof k === 'symbol' || k === 'then' ? undefined : k in plain ? plain[k] : fns[k] ?? (() => Promise.resolve(undefined))) }) as Client;
+}
+/** Never throws: when a peer is missing, the key is absent or startup fails, it warns once, leaves telemetry off and returns a no-op client. */
 export function init(opts: InitOptions): Client {
-  defaultResourceDetectors(); // before any NodeSDK reads OTEL_NODE_RESOURCE_DETECTORS
   const missing = missingPeers();
-  if (missing.length) console.warn(`[watchtower] missing OpenTelemetry package(s): ${missing.join(', ')}. Next.js standalone: ${STANDALONE_HINT}. Otherwise: npm install ${missing.join(' ')}`);
+  if (missing.length) return turnOff(`missing OpenTelemetry package(s): ${missing.join(', ')}. Next.js standalone: ${STANDALONE_HINT}. Otherwise: npm install ${missing.join(' ')}`);
+  try {
+    return start(opts);
+  } catch (e) {
+    return turnOff((e as Error)?.message ?? String(e));
+  }
+}
+function turnOff(why: string): Client {
+  state.current = undefined;
+  setOffReason(why);
+  console.warn(`[watchtower] telemetry is OFF: ${why}`);
+  return offClient();
+}
+function start(opts: InitOptions): Client {
+  defaultResourceDetectors(); // before any NodeSDK reads OTEL_NODE_RESOURCE_DETECTORS
   const nextMode = opts?.nextInternals ?? (process.env.NEXT_RUNTIME ? 'sample' : undefined);
   if (nextMode) {
     const own = nextInternalsFilter(nextMode, opts?.nextInternalsRate);

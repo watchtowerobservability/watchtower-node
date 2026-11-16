@@ -34,7 +34,7 @@ export const SDK_PEERS = [
   '@opentelemetry/resources', '@opentelemetry/sdk-logs', '@opentelemetry/sdk-metrics', '@opentelemetry/sdk-trace',
 ];
 
-/** Load an OpenTelemetry SDK package (an optional peer); a missing one throws an error naming what to install. */
+/** Load an OpenTelemetry SDK package (a dependency, loaded lazily); a missing one throws an error naming what to install. */
 export function need<T>(id: string): T {
   try {
     return load(id) as T;
@@ -54,3 +54,13 @@ export function missingPeers(): string[] {
     try { load(id); return false; } catch { return true; }
   });
 }
+
+/**
+ * Never called. Literal names so file tracers (Next's standalone nft) copy the SDK packages together with their pnpm
+ * links, which outputFileTracingIncludes cannot do. Safe for bundlers: these are dependencies, so always installed.
+ */
+export const tracedPackages = (): Promise<unknown>[] => [
+  import('@opentelemetry/context-async-hooks'), import('@opentelemetry/core'), import('@opentelemetry/exporter-logs-otlp-http'),
+  import('@opentelemetry/exporter-metrics-otlp-http'), import('@opentelemetry/exporter-trace-otlp-http'), import('@opentelemetry/otlp-transformer'),
+  import('@opentelemetry/resources'), import('@opentelemetry/sdk-logs'), import('@opentelemetry/sdk-metrics'), import('@opentelemetry/sdk-trace'),
+];

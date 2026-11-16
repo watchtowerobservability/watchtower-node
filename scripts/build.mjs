@@ -11,8 +11,13 @@ for (const p of ['tsconfig.cjs.json', 'tsconfig.esm.json']) execFileSync(process
 writeFileSync('dist/cjs/package.json', '{"type":"commonjs"}\n');
 writeFileSync('dist/esm/package.json', '{"type":"module"}\n');
 
-// ESM needs no shim: load.ts falls back to a createRequire() that bundlers cannot follow (see load.ts), so webpack neither
-// warns about the missing optional peers nor flags a critical dependency.
+// ESM has no __filename, so search the SDK's own location (where npm and pnpm put its dependencies) from import.meta.url,
+// wrapped in a call so bundlers do not treat it as a static createRequire (see load.ts).
+const loadJs = 'dist/esm/load.js';
+const self = "typeof __filename === 'string' ? __filename : ''";
+const loadSrc = readFileSync(loadJs, 'utf8');
+if (!loadSrc.includes(self)) throw new Error(`${loadJs}: SDK location expression not found`);
+writeFileSync(loadJs, loadSrc.replace(self, 'String(new URL(import.meta.url))'));
 
 // Declarations must not break consumers that skip installing an optional peer (TS2307 under skipLibCheck:false).
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
