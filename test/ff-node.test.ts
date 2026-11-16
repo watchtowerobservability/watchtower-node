@@ -12,7 +12,7 @@ import { checkin } from '../src/checkin.js';
 import { installSignalFlush } from '../src/shutdown.js';
 import { isNextInternal, nextInternalsFilter } from '../src/integrations/next.js';
 import { tunnelHandler } from '../src/integrations/next-tunnel.js';
-import { uploadSourcemaps, withWatchtower } from '../src/integrations/next-build.js';
+import { tracingIncludes, uploadSourcemaps, withWatchtower } from '../src/integrations/next-build.js';
 
 type Done = (r: { code: number }) => void;
 const spans: ReadableSpan[] = [];
@@ -109,7 +109,8 @@ test('withWatchtower: standalone zero config (externals, tracing includes, relea
   const c = withWatchtower({ serverExternalPackages: ['sharp'], outputFileTracingIncludes: { '/x': ['a'], '/*': ['b'] }, env: { NEXT_PUBLIC_WT_RELEASE: 'mine' } }, { release: 'r1' }) as Record<string, any>;
   expect(c.serverExternalPackages).toEqual(expect.arrayContaining(['sharp', '@watchtowerobservability/node', '@opentelemetry/sdk-trace', '@opentelemetry/exporter-trace-otlp-http']));
   expect(c.outputFileTracingIncludes['/x']).toEqual(['a']);
-  expect(c.outputFileTracingIncludes['/*']).toEqual(expect.arrayContaining(['b', './node_modules/@opentelemetry/**/*', './node_modules/.pnpm/@opentelemetry*/**/*']));
+  expect(c.outputFileTracingIncludes['/*'][0]).toBe('b');
+  expect(c.outputFileTracingIncludes['/*'].some((g: string) => g.includes('node_modules/@opentelemetry/**'))).toBe(false); // broke pnpm (B22)
   expect(c.env.NEXT_PUBLIC_WT_RELEASE).toBe('mine');
   expect((withWatchtower({}, { release: 'r1' }) as Record<string, any>).env).toEqual({ NEXT_PUBLIC_WT_RELEASE: 'r1' });
 });
@@ -283,4 +284,27 @@ test('withWatchtower next to Sentry keeps the OTel packages Sentry shares bundle
   expect(hasSentry(dir)).toBe(true);
   expect(hasSentry(fs.mkdtempSync(path.join(os.tmpdir(), 'wt-nosentry-')))).toBe(false);
   expect((withWatchtower({}, { sentry: true }) as { serverExternalPackages: string[] }).serverExternalPackages).not.toContain('@opentelemetry/api');
+});
+
+test('withWatchtower: pnpm includes keep links and real folders, and follow dependencies (B22)', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-pnpm-'));
+  const store = (n: string, deps: Record<string, string> = {}) => {
+    const d = path.join(root, 'node_modules', '.pnpm', `${n.replace('/', '+')}@1.0.0`, 'node_modules', n);
+    fs.mkdirSync(d, { recursive: true });
+    fs.writeFileSync(path.join(d, 'package.json'), JSON.stringify({ name: n, dependencies: deps }));
+    return d;
+  };
+  const core = store('@opentelemetry/core', { '@opentelemetry/semantic-conventions': '1' });
+  const sem = store('@opentelemetry/semantic-conventions');
+  fs.symlinkSync(sem, path.join(path.dirname(core), 'semantic-conventions')); // pnpm puts deps beside the package
+  const app = path.join(root, 'apps', 'web');
+  fs.mkdirSync(path.join(app, 'node_modules', '@opentelemetry'), { recursive: true });
+  fs.symlinkSync(core, path.join(app, 'node_modules', '@opentelemetry', 'core'));
+  const inc = tracingIncludes(['@opentelemetry/core', '@opentelemetry/not-installed'], fs.realpathSync(app));
+  expect(inc).toEqual([
+    'node_modules/@opentelemetry/core',
+    '../../node_modules/.pnpm/@opentelemetry+core@1.0.0/node_modules/@opentelemetry/core/**/*',
+    '../../node_modules/.pnpm/@opentelemetry+core@1.0.0/node_modules/@opentelemetry/semantic-conventions',
+    '../../node_modules/.pnpm/@opentelemetry+semantic-conventions@1.0.0/node_modules/@opentelemetry/semantic-conventions/**/*',
+  ]);
 });

@@ -2,7 +2,7 @@ import { test, expect, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { standaloneMissing } from '../src/next-doctor.js';
+import { standaloneMissing, standaloneServer, standaloneUnloadable } from '../src/next-doctor.js';
 import { SDK_PEERS, missingPeers } from '../src/load.js';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'wt-doctor-'));
@@ -35,4 +35,16 @@ test('init warns once naming missing peers and the standalone fix', async () => 
   expect(missingPeers).toBeTypeOf('function');
   vi.doUnmock('../src/load.js');
   warn.mockRestore();
+});
+
+test('doctor: finds a monorepo app server.js and reports a peer that does not load', () => {
+  const d = tmp();
+  const app = path.join(d, '.next', 'standalone', 'apps', 'web');
+  fs.mkdirSync(app, { recursive: true });
+  fs.writeFileSync(path.join(app, 'server.js'), '');
+  const server = standaloneServer(d)!;
+  expect(server).toBe(path.join(app, 'server.js'));
+  const bad = standaloneUnloadable(server);
+  expect(bad[0]).toMatch(/^@watchtowerobservability\/node: /);
+  expect(bad.some((b) => b.startsWith('@opentelemetry/resources: '))).toBe(true);
 });

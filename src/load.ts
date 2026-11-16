@@ -5,7 +5,7 @@ import nodePath from 'node:path';
 // Bundlers must NOT follow this: an optional peer the app did not install would make webpack warn "Module not found",
 // and a bare require call on a variable id is a "Critical dependency" warning. createRequire() is opaque to webpack/esbuild/Next's tracer,
 // so peers resolve at run time from the SDK's own location, then from the app root (cwd). Install the peers in the app
-// (pnpm: as direct dependencies); for a Next standalone build add them to outputFileTracingIncludes.
+// (pnpm: as direct dependencies). A Next standalone build gets them through withWatchtower's tracingIncludes (next-build.ts).
 /** Where peers are searched, in order: the SDK's own location, the cwd, the entry script's directory (pnpm monorepo apps run from the repo root). */
 export function searchPaths(): string[] {
   const entry = process.argv[1] ? `${nodePath.dirname(nodePath.resolve(process.argv[1]))}/` : '';
@@ -46,7 +46,7 @@ export function need<T>(id: string): T {
   }
 }
 
-export const STANDALONE_HINT = 'use withWatchtower() from @watchtowerobservability/next, or add them to serverExternalPackages and outputFileTracingIncludes in next.config';
+export const STANDALONE_HINT = 'use withWatchtower() from @watchtowerobservability/next (node SDK 0.7.9 or later) in next.config';
 
 /** Required OpenTelemetry peers that cannot be loaded from the SDK's location or the app root. */
 export function missingPeers(): string[] {

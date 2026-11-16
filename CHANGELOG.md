@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.9 (2026-11-16)
+
+- Fix (Next.js standalone, pnpm and monorepos; B22, WT-13): `withWatchtower` listed `node_modules/@opentelemetry/**` globs in `outputFileTracingIncludes`. Under pnpm those copied each peer as a plain folder without its own dependencies, or matched nothing when the `.pnpm` store sits at the workspace root, so `init` failed with `missing @opentelemetry/resources`. It now walks the SDK's dependency closure from the app at config time and lists each package's real store folder plus the pnpm links to it, which Next recreates as links. Verified with a pnpm workspace (`apps/web`, `outputFileTracingRoot` at the root, `output: 'standalone'`, peers as direct deps of the app, no peer imports in `instrumentation`): `server.js` starts with no missing-package warning and `wt-next-doctor` exits 0. Your own `outputFileTracingIncludes` are kept. New export: `tracingIncludes(ids, cwd)`.
+- `wt-next-doctor` also looks in the app's own `node_modules` (`.next/standalone/<app path>/node_modules`), then loads the SDK (as ESM, the way Next does) and each peer from the standalone `server.js`, and exits 1 naming any that fail, not only the ones whose folder is missing.
+
 ## 0.7.8 (2026-11-16)
 
 - Fix: on a non-cloud VM the OpenTelemetry resource detectors probed `169.254.169.254` and the 10 s timeout surfaced as a `UND_ERR_CONNECT_TIMEOUT` issue. When `OTEL_NODE_RESOURCE_DETECTORS` is unset, `init()` now sets it to `env,host,os,process`, adding `aws`, `gcp` or `azure` only when an environment variable shows that cloud (for example `AWS_REGION`, `K_SERVICE`, `WEBSITE_SITE_NAME`). Set `OTEL_NODE_RESOURCE_DETECTORS` yourself to override. Call `init()` (or use the `register` preload) before your own `NodeSDK` starts.

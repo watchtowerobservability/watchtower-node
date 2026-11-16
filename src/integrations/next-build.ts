@@ -71,13 +71,48 @@ export function hasSentry(cwd = process.cwd()): boolean {
 export function externalPackages(sentry: boolean): string[] {
   return sentry ? EXTERNAL.filter((n) => !SHARED_WITH_SENTRY.has(n)) : EXTERNAL;
 }
+/** Where Node finds package `id` from `from`: the lookup path (may be a pnpm symlink) and its real folder. */
+function locate(id: string, from: string): { link: string; real: string } | undefined {
+  for (let d = from; ; d = nodePath.dirname(d)) {
+    const link = nodePath.join(d, 'node_modules', id);
+    if (fs.existsSync(nodePath.join(link, 'package.json'))) return { link, real: fs.realpathSync(link) };
+    if (nodePath.dirname(d) === d) return undefined;
+  }
+}
+
+/**
+ * `outputFileTracingIncludes` globs for `ids` and everything they depend on, relative to `cwd`: each package's real
+ * folder plus every pnpm symlink on the way to it, which Next recreates as links (what its tracer emits for a static
+ * import). A plain `node_modules/<pkg>/**` glob copies a pnpm link as a folder cut off from its dependencies (B22).
+ */
+export function tracingIncludes(ids: string[], cwd = process.cwd()): string[] {
+  const out = new Set<string>(), seen = new Set<string>();
+  const rel = (p: string) => nodePath.relative(cwd, p).split(nodePath.sep).join('/').replace(/[()[\]{}*?!]/g, '\\$&');
+  const visit = (id: string, from: string): void => {
+    const hit = locate(id, from);
+    if (!hit) return; // an optional peer that is not installed
+    if (fs.lstatSync(hit.link).isSymbolicLink()) out.add(rel(hit.link));
+    if (seen.has(hit.real)) return;
+    seen.add(hit.real);
+    out.add(`${rel(hit.real)}/**/*`);
+    try {
+      const pkg = JSON.parse(fs.readFileSync(nodePath.join(hit.real, 'package.json'), 'utf8')) as Record<string, Record<string, string> | undefined>;
+      // peers: only OpenTelemetry ones (the SDK's peers are in `ids` already; following `next` would copy all of it)
+      const peers = Object.keys(pkg.peerDependencies ?? {}).filter((n) => n.startsWith('@opentelemetry/'));
+      for (const dep of [...Object.keys({ ...pkg.dependencies, ...pkg.optionalDependencies }), ...peers]) visit(dep, hit.real);
+    } catch { /* unreadable package.json: its own files are still included */ }
+  };
+  for (const id of ids) visit(id, cwd);
+  return [...out];
+}
+
 const SHA_ENV = ['WT_RELEASE', 'GITHUB_SHA', 'CI_COMMIT_SHA', 'VERCEL_GIT_COMMIT_SHA', 'SOURCE_VERSION', 'BUILD_SHA', 'RENDER_GIT_COMMIT', 'HEROKU_SLUG_COMMIT'];
-const INCLUDE = ['@watchtowerobservability/node', '@opentelemetry'].flatMap((p) => [`./node_modules/${p}/**/*`, `./node_modules/.pnpm/${p.replace('/', '+')}*/**/*`]);
 
 /**
  * `module.exports = withWatchtower(nextConfig, { sourcemaps: true })`. Makes `output: 'standalone'` work with no other
- * config: the node SDK and its OpenTelemetry peers go into `serverExternalPackages` and (npm and pnpm layouts) into
- * `outputFileTracingIncludes` for every route. Sets `NEXT_PUBLIC_WT_RELEASE`. With `sourcemaps` it turns on
+ * config: the node SDK and its OpenTelemetry peers go into `serverExternalPackages`, and `outputFileTracingIncludes`
+ * for every route lists each one with its dependencies and pnpm links (npm, pnpm, monorepos; see tracingIncludes), so
+ * the SDK starts whichever entry instrumentation imports. Sets `NEXT_PUBLIC_WT_RELEASE`. With `sourcemaps` it turns on
  * `productionBrowserSourceMaps` (webpack and Turbopack); `{ upload: true }` uploads and deletes them after the webpack
  * client build, otherwise run `wt-next-sourcemaps` after `next build` (`"build": "next build && wt-next-sourcemaps"`).
  */
@@ -86,7 +121,7 @@ export function withWatchtower(config: ConfigOrFn = {}, opts: WatchtowerNextOpti
   const release = opts.release || SHA_ENV.map((k) => process.env[k]).find((v) => v && v !== 'unknown');
   const apply = (c: NextConfig): NextConfig => {
     const inc = { ...(c.outputFileTracingIncludes as Record<string, string[]> | undefined) };
-    inc['/*'] = [...new Set([...(inc['/*'] ?? []), ...INCLUDE])];
+    inc['/*'] = [...new Set([...(inc['/*'] ?? []), ...tracingIncludes(EXTERNAL)])];
     const out: NextConfig = {
       ...c,
       serverExternalPackages: [...new Set([...((c.serverExternalPackages as string[] | undefined) ?? []), ...externalPackages(opts.sentry ?? hasSentry())])],
