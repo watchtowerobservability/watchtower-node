@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.7 (2026-11-16)
+
+- Quieter traces by default: `pg-pool.connect`, bare `BEGIN` / `COMMIT` / `ROLLBACK` statement spans and Express middleware layer spans (`middleware - *`, `expressInit`, `query`) are dropped before export; errored spans are always kept. `noisySpans: true` (or `WT_NOISY_SPANS=1`) keeps them. Your own `spanFilter` still runs on what is left.
+- When the ingest endpoint refuses traces with HTTP 429 (the project's daily quota is spent), the SDK prints one `[watchtower] traces are being dropped: daily quota reached (...)` warning instead of failing silently. The server now answers with a body naming the quota and `Retry-After` until 00:00 UTC.
+- `tunnelHandler` takes `otlpEndpoint` (base URL for `/v1/traces` and `/v1/logs`, default `endpoint`) and logs one warning when the upstream answers 404 for those paths. The edge now serves `/v1/traces` for publishable keys, so the documented single-endpoint tunnel works.
+
 ## 0.7.6 (2026-11-15)
 
 - Next.js: `withWatchtower` now keeps every OpenTelemetry instrumentation package the SDK loads (`instrumentation-http`, `-undici`, `-runtime-node`, `-pg`, `-mysql2`, `-ioredis`) in `serverExternalPackages`. Bundled, they extended an undefined `InstrumentationBase` and a standalone build failed every request with `Class extends value undefined`. A test keeps the list in step with `package.json`.

@@ -17,7 +17,7 @@ import { resolveRedact } from './redact-presets.js';
 import type { RedactPreset } from './redact-presets.js';
 import { foreignProvider, attachProcessors } from './attach.js';
 import { scrubUrl, urlScrubber } from './scrub.js';
-import { filterExporter } from './filter.js';
+import { filterExporter, isNoisySpan, quotaWarnExporter } from './filter.js';
 import { nextInternalsFilter } from './next-filter.js';
 import { checkin as runCheckin } from './checkin.js';
 import { checkIn as checkInFor, withMonitor as withMonitorFor } from './cron/monitor.js';
@@ -124,6 +124,12 @@ export interface InitOptions {
   otel?: 'auto' | 'own' | 'attach';
   /** Return false to drop a finished span before export (the `/next` entry uses it for `nextInternals`). */
   spanFilter?: (span: ReadableSpan) => boolean;
+  /**
+   * Keep the low-value auto-instrumentation spans that are dropped by default: `pg-pool.connect`, bare `BEGIN` / `COMMIT` /
+   * `ROLLBACK` statements and Express middleware layers (`middleware - *`, `expressInit`, `query`). Errored spans are always kept.
+   * Default false; `WT_NOISY_SPANS=1` sets it.
+   */
+  noisySpans?: boolean;
   /**
    * Next.js's own spans (`next.span_type` set: load route module, prepare route module, resolve page components, start
    * response, middleware, generateMetadata ...), root ones included. `"sample"` keeps `nextInternalsRate` of them, `"drop"`
@@ -253,7 +259,9 @@ export class Client implements InitStatus {
       // spans and log records spool to their own subdirectories
       if (o.bufferDir) exporter = new SpoolExporter(exporter, nodePath.join(o.bufferDir, 'traces'), url, this.headers, this.fetch);
     }
-    if (o.spanFilter) exporter = filterExporter(exporter, o.spanFilter);
+    const keepNoisy = o.noisySpans ?? env.WT_NOISY_SPANS === '1';
+    const user = o.spanFilter;
+    exporter = filterExporter(quotaWarnExporter(exporter), keepNoisy ? user ?? (() => true) : user ? (s) => !isNoisySpan(s) && user(s) : (s) => !isNoisySpan(s));
     // the scrubber and redactor run first, so the batch processor exports scrubbed attributes (the user's `redact` sees scrubbed URLs)
     const { BatchSpanProcessor, TracerProvider: TP } = needPeer<typeof import('@opentelemetry/sdk-trace')>('@opentelemetry/sdk-trace');
     let sampler: unknown;

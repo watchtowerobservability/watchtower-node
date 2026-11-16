@@ -5,6 +5,8 @@
 export interface TunnelOptions {
   /** Edge base URL the requests are forwarded to. */
   endpoint: string;
+  /** Base URL for `/v1/traces` and `/v1/logs` (for example the ingest host); default: `endpoint`. */
+  otlpEndpoint?: string;
   /** Route prefix to strip; default `/api/wt`. */
   basePath?: string;
   /** Request body cap in bytes; default 1 MiB (over it: 413). */
@@ -29,7 +31,9 @@ export function tunnelHandler(o: TunnelOptions): { GET: (r: Request) => Promise<
   const max = o.maxBodyBytes ?? 1024 * 1024;
   const edge = o.endpoint.replace(/\/+$/, '');
   const allow = o.allowKey === undefined ? [] : ([] as string[]).concat(o.allowKey);
+  const otlp = (o.otlpEndpoint ?? o.endpoint).replace(/\/+$/, '');
   const send = o.fetch ?? fetch;
+  let warned = false;
   const handle = async (req: Request): Promise<Response> => {
     const url = new URL(req.url);
     const path = url.pathname.startsWith(base) ? url.pathname.slice(base.length) : url.pathname;
@@ -50,7 +54,12 @@ export function tunnelHandler(o: TunnelOptions): { GET: (r: Request) => Promise<
       if (body.byteLength > max) return new Response('payload too large', { status: 413 });
     }
     try {
-      const res = await send(`${edge}${path}${k ? `?k=${encodeURIComponent(k)}` : ''}`, { method: req.method, headers, body });
+      const isOtlp = path === '/v1/traces' || path === '/v1/logs';
+      const res = await send(`${isOtlp ? otlp : edge}${path}${k ? `?k=${encodeURIComponent(k)}` : ''}`, { method: req.method, headers, body });
+      if (isOtlp && res.status === 404 && !warned) {
+        warned = true; // once per process: a 404 here drops every browser span silently
+        console.warn(`[watchtower] tunnel: ${isOtlp ? otlp : edge}${path} answered 404; upgrade the edge or set tunnelHandler({ otlpEndpoint })`);
+      }
       const out = new Headers();
       const ct = res.headers.get('content-type');
       if (ct) out.set('content-type', ct);
