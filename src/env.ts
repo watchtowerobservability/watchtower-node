@@ -83,3 +83,20 @@ export function resolveRelease(opt: string | undefined, env: NodeJS.ProcessEnv, 
   for (const v of [opt, env.WT_RELEASE, otelResource['service.version'], ...CI_SHA_VARS.map((k) => env[k]), env.WT_BUILD_STAMP, env.BUILD_STAMP]) { const r = present(v); if (r) return r; }
   return gitFrom ? gitHeadSha(gitFrom) : undefined;
 }
+
+/** Cloud metadata endpoints; probing them from a non-cloud host times out, so they never become spans or issues. */
+export const METADATA_HOSTS = new Set(['169.254.169.254', 'metadata.google.internal', '169.254.170.2', 'metadata.azure.internal']);
+
+/**
+ * When OTEL_NODE_RESOURCE_DETECTORS is unset, limit the OTel Node resource detectors to local ones; a cloud detector is added only
+ * when an env var shows that cloud. Otherwise the detectors probe 169.254.169.254 and a non-cloud VM waits out a 10 s connect timeout.
+ */
+export function defaultResourceDetectors(env: NodeJS.ProcessEnv = process.env): void {
+  if (env.OTEL_NODE_RESOURCE_DETECTORS) return;
+  const on = (...k: string[]): boolean => k.some((x) => !!env[x]);
+  const d = ['env', 'host', 'os', 'process'];
+  if (on('AWS_REGION', 'AWS_DEFAULT_REGION', 'AWS_EXECUTION_ENV', 'ECS_CONTAINER_METADATA_URI')) d.push('aws');
+  if (on('GOOGLE_CLOUD_PROJECT', 'GCP_PROJECT', 'K_SERVICE', 'GAE_SERVICE')) d.push('gcp');
+  if (on('WEBSITE_SITE_NAME', 'AZURE_FUNCTIONS_ENVIRONMENT', 'AZURE_CLIENT_ID', 'AZURE_TENANT_ID')) d.push('azure');
+  env.OTEL_NODE_RESOURCE_DETECTORS = d.join(',');
+}

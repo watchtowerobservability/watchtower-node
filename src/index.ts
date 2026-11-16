@@ -8,7 +8,7 @@ import type { ReadableSpan, SpanExporter, TracerProvider } from '@opentelemetry/
 import type { LoggerProvider, LogRecordExporter } from '@opentelemetry/sdk-logs';
 import type { MeterProvider, PushMetricExporter } from '@opentelemetry/sdk-metrics';
 import { missingPeers, need as needPeer, STANDALONE_HINT } from './load.js';
-import { otelEnv, resolveRelease } from './env.js';
+import { defaultResourceDetectors, otelEnv, resolveRelease } from './env.js';
 import { dbRequireParent, setHttpServerActive } from './integrations/db.js';
 import { instrumentAll } from './instrument.js';
 import { LOG_BODY_KEY, redactor } from './redact.js';
@@ -485,6 +485,7 @@ function registerGlobals(c: Client): void {
   }
 }
 export function init(opts: InitOptions): Client {
+  defaultResourceDetectors(); // before any NodeSDK reads OTEL_NODE_RESOURCE_DETECTORS
   const missing = missingPeers();
   if (missing.length) console.warn(`[watchtower] missing OpenTelemetry package(s): ${missing.join(', ')}. Next.js standalone: ${STANDALONE_HINT}. Otherwise: npm install ${missing.join(' ')}`);
   const nextMode = opts?.nextInternals ?? (process.env.NEXT_RUNTIME ? 'sample' : undefined);

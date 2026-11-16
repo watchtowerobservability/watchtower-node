@@ -2,6 +2,7 @@
 import { load } from './load.js';
 import { instrumentBetterSqlite3 } from './integrations/sqlite.js';
 import { instrumentPostgres } from './integrations/postgres.js';
+import { METADATA_HOSTS } from './env.js';
 import { routeNamer } from './integrations/util.js';
 
 /** Instrumentation packages already registered in this process (by `init` or `instrument()`), so none is patched twice. */
@@ -9,17 +10,19 @@ export const registered = new Set<string>();
 
 interface Providers { tracerProvider: unknown; meterProvider?: unknown }
 
+const hostOf = (o?: string): string => { try { return new URL(o ?? '').hostname; } catch { return ''; } };
+
 const ENTRIES: { pkg: string; ctor: string; opts: (self: URL[]) => object; auto?: boolean }[] = [
   {
     pkg: '@opentelemetry/instrumentation-http', ctor: 'HttpInstrumentation',
     // our own exports and API calls must not become spans
     // routeNamer: server spans become `GET /users/:id` from the matched Express / Nest route (http alone names them just `GET`)
     opts: (self) => ({ applyCustomAttributesOnSpan: routeNamer, ignoreOutgoingRequestHook: (r: { hostname?: string; host?: string; port?: string | number }) =>
-      self.some((u) => (r.hostname || r.host) === u.hostname && String(r.port ?? (u.protocol === 'https:' ? 443 : 80)) === String(u.port || (u.protocol === 'https:' ? 443 : 80))) }),
+      METADATA_HOSTS.has(String(r.hostname || r.host).replace(/:\d+$/, '')) || self.some((u) => (r.hostname || r.host) === u.hostname && String(r.port ?? (u.protocol === 'https:' ? 443 : 80)) === String(u.port || (u.protocol === 'https:' ? 443 : 80))) }),
   },
   {
     pkg: '@opentelemetry/instrumentation-undici', ctor: 'UndiciInstrumentation',
-    opts: (self) => ({ ignoreRequestHook: (r: { origin?: string }) => self.some((u) => r.origin === u.origin) }),
+    opts: (self) => ({ ignoreRequestHook: (r: { origin?: string }) => METADATA_HOSTS.has(hostOf(r.origin)) || self.some((u) => r.origin === u.origin) }),
   },
   { pkg: '@opentelemetry/instrumentation-pg', ctor: 'PgInstrumentation', opts: () => ({}) },
   { pkg: '@opentelemetry/instrumentation-ioredis', ctor: 'IORedisInstrumentation', opts: () => ({}) },

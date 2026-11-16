@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.8 (2026-11-16)
+
+- Fix: on a non-cloud VM the OpenTelemetry resource detectors probed `169.254.169.254` and the 10 s timeout surfaced as a `UND_ERR_CONNECT_TIMEOUT` issue. When `OTEL_NODE_RESOURCE_DETECTORS` is unset, `init()` now sets it to `env,host,os,process`, adding `aws`, `gcp` or `azure` only when an environment variable shows that cloud (for example `AWS_REGION`, `K_SERVICE`, `WEBSITE_SITE_NAME`). Set `OTEL_NODE_RESOURCE_DETECTORS` yourself to override. Call `init()` (or use the `register` preload) before your own `NodeSDK` starts.
+- The http and undici instrumentations ignore requests to cloud metadata endpoints (`169.254.169.254`, `169.254.170.2`, `metadata.google.internal`, `metadata.azure.internal`), so a failed probe is never reported as an error.
+
 ## 0.7.7 (2026-11-16)
 
 - Quieter traces by default: `pg-pool.connect`, bare `BEGIN` / `COMMIT` / `ROLLBACK` statement spans and Express middleware layer spans (`middleware - *`, `expressInit`, `query`) are dropped before export; errored spans are always kept. `noisySpans: true` (or `WT_NOISY_SPANS=1`) keeps them. Your own `spanFilter` still runs on what is left.
