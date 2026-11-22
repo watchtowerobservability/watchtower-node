@@ -6,6 +6,13 @@ import type { ServerSpan } from './util.js';
 
 const KEY = Symbol('wt.span');
 const SENT = Symbol('wt.sent');
+const seenErrors = new WeakSet<object>(); // one event per Error object, even if the app also calls captureException
+
+/** Plugin options. */
+export interface FastifyPluginOptions {
+  /** Capture 5xx errors in an onError hook. Default true. */
+  captureErrors?: boolean;
+}
 
 interface FastifyRequestLike {
   method: string;
@@ -30,17 +37,21 @@ export interface FastifyLike {
 }
 
 /** await app.register(plugin): server span per request (or the http instrumentation's own server span, enriched) plus 5xx error capture. */
-export function plugin(fastify: FastifyLike, _opts: unknown, done: (err?: Error) => void): void {
+export function plugin(fastify: FastifyLike, opts: FastifyPluginOptions | undefined, done: (err?: Error) => void): void {
   fastify.addHook('onRequest', (req: FastifyRequestLike, _reply: unknown, next: () => void) => {
     // with the http instrumentation active its server span is enriched (route, status) instead of starting a second one
     const s = adoptServerSpan(req.method) ?? serverSpan(req.method, req.url);
     req[KEY] = s;
     context.with(s.ctx, next);
   });
-  fastify.addHook('onError', (_req: FastifyRequestLike, _reply: unknown, err: unknown, next: () => void) => {
-    if (statusOf(err) >= 500) captureException(err);
-    next();
-  });
+  if (opts?.captureErrors !== false) {
+    fastify.addHook('onError', (req: FastifyRequestLike, _reply: unknown, err: unknown, next: () => void) => {
+      const dup = err !== null && typeof err === 'object' && seenErrors.has(err);
+      if (err !== null && typeof err === 'object') seenErrors.add(err);
+      if (!dup && statusOf(err) >= 500) captureException(err, { route: (req.routeOptions && req.routeOptions.url) || req.routerPath });
+      next();
+    });
+  }
   // the serialized response body (string, Buffer or stream); passed on unchanged
   fastify.addHook('onSend', (req: FastifyRequestLike, _reply: unknown, payload: unknown, next: (err: null, p: unknown) => void) => {
     if (captureActive()) req[SENT] = payload;

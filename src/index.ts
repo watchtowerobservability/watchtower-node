@@ -1,5 +1,6 @@
 // Thin Watchtower layer over the OpenTelemetry Node SDK: key header, endpoint default,
 // offline buffer, wt.*-safe resource attributes, redaction hook, getPrompt/score/evaluate/observe.
+import { checkLate } from './late.js'; // first: snapshots which builtins were loaded before the SDK
 import { inspect } from 'node:util';
 import { context, diag, metrics, propagation, trace } from '@opentelemetry/api';
 import type { Tracer } from '@opentelemetry/api';
@@ -10,8 +11,10 @@ import type { MeterProvider, PushMetricExporter } from '@opentelemetry/sdk-metri
 import { missingPeers, need as needPeer, STANDALONE_HINT } from './load.js';
 import { defaultResourceDetectors, otelEnv, resolveRelease } from './env.js';
 import { dbRequireParent, setHttpServerActive } from './integrations/db.js';
-import { instrumentAll } from './instrument.js';
-import { LOG_BODY_KEY, redactor } from './redact.js';
+import { INSTRUMENTATION_PKGS, instrumentAll } from './instrument.js';
+import { markDeploy } from './deploy.js';
+import { LOG_BODY_KEY, isDrop, redactor } from './redact.js';
+export { DROP } from './redact.js';
 import type { RedactHook } from './redact.js';
 import { resolveRedact } from './redact-presets.js';
 import type { RedactPreset } from './redact-presets.js';
@@ -19,6 +22,7 @@ import { foreignProvider, attachProcessors } from './attach.js';
 import { scrubUrl, urlScrubber } from './scrub.js';
 import { filterExporter, isNoisySpan, quotaWarnExporter } from './filter.js';
 import { nextInternalsFilter } from './next-filter.js';
+import { debug, keyHint, noteDrop, StatusLine, watchLogs, watchMetrics, watchSpans } from './diagnostics.js';
 import { checkin as runCheckin } from './checkin.js';
 import { checkIn as checkInFor, withMonitor as withMonitorFor } from './cron/monitor.js';
 import type { CheckInOptions, CheckInStatus, MonitorOptions } from './cron/monitor.js';
@@ -46,6 +50,8 @@ export type { CaptureRule } from './payload.js';
 export type { CaptureContext };
 
 export const DEFAULT_ENDPOINT = 'http://localhost:4318';
+/** Used when an ingest key is set and no endpoint is configured (a key always means a real deployment). */
+export const HOSTED_ENDPOINT = 'https://ingest.watchtowerops.net';
 
 export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
 /** code.filepath/code.lineno of the frame that called `log()` (stack line 0 is "Error", 1 is `log`, 2 the caller). */
@@ -76,7 +82,7 @@ export interface InitOptions {
   metrics?: boolean;
   /** Replace the metric exporter (tests); setting it turns metrics on unless `metrics` is false. */
   metricExporter?: unknown;
-  /** OTLP/HTTP base URL; defaults to WT_OTLP_ENDPOINT, then OTEL_EXPORTER_OTLP_ENDPOINT, then http://localhost:4318. */
+  /** OTLP/HTTP base URL; defaults to WT_OTLP_ENDPOINT, then OTEL_EXPORTER_OTLP_ENDPOINT, then https://ingest.watchtowerops.net (the key is always set here). */
   endpoint?: string;
   /** REST API base URL for getPrompt/score; defaults to WT_API_URL or endpoint. */
   apiUrl?: string;
@@ -140,12 +146,12 @@ export interface InitOptions {
   /** Share of internal spans kept with `nextInternals: "sample"`; default 0.1. */
   nextInternalsRate?: number;
   /**
-   * Patch node:http, fetch (undici), pg and ioredis for those whose `@opentelemetry/instrumentation-*` peer is installed; defaults to on unless WT_INSTRUMENT=0.
-   * `'auto'` (or WT_INSTRUMENT=auto) also instruments whichever of postgres.js, better-sqlite3 and mysql2 is installed and logs one line naming what it patched
-   * (`instrumentLog: false` or WT_INSTRUMENT_LOG=0 silences it). `init` only: use the `/register` preload so it runs before the app imports them.
+   * Patch node:http, fetch (undici), pg and ioredis (dependencies of this package), plus mysql2, postgres.js and better-sqlite3 when installed; defaults to on unless WT_INSTRUMENT=0.
+   * Logs one line naming what it patched, and a warning when it patched nothing (`instrumentLog: false` or WT_INSTRUMENT_LOG=off silences both).
+   * `'auto'` is the same as `true`. `init` only: use the `/register` preload so it runs before the app imports them.
    */
   instrument?: boolean | 'auto';
-  /** Print the one-line list of what `instrument: 'auto'` patched (default true). */
+  /** Print the one-line list of what was patched (default true). */
   instrumentLog?: boolean;
   fetch?: typeof fetch;
 }
@@ -223,7 +229,7 @@ export class Client implements InitStatus {
     const oe = otelEnv(env);
     const apiKey = o.apiKey || env.WT_INGEST_KEY || oe.bearer;
     if (!apiKey) throw new Error('apiKey is required (or set WT_INGEST_KEY)');
-    this.endpoint = (o.endpoint || env.WT_OTLP_ENDPOINT || oe.endpoint || DEFAULT_ENDPOINT).replace(/\/+$/, '');
+    this.endpoint = (o.endpoint || env.WT_OTLP_ENDPOINT || oe.endpoint || HOSTED_ENDPOINT).replace(/\/+$/, '');
     this.apiUrl = (o.apiUrl || env.WT_API_URL || this.endpoint).replace(/\/+$/, '');
     this.project = o.project || env.WT_PROJECT_ID;
     this.headers = { ...oe.headers, Authorization: `Bearer ${apiKey}` };
@@ -251,6 +257,11 @@ export class Client implements InitStatus {
     this.redact = red.hook;
     this.scrubUrls = o.urlScrubbing ?? red.preset !== 'off';
     this.logCaller = o.logCaller ?? env.WATCHTOWER_LOG_CALLER === '1';
+    const logsOn = switchOn('WATCHTOWER_LOGS', 'OTEL_LOGS_EXPORTER', o.logs ?? (o.logExporter ? true : undefined));
+    const metricsOn = switchOn('WATCHTOWER_METRICS', 'OTEL_METRICS_EXPORTER', o.metrics ?? (o.metricExporter ? true : undefined));
+    // one status line per process, fed by the default OTLP exporters (explicit test exporters are left alone)
+    const line = new StatusLine({ service: String(resource.attributes['service.name']), endpoint: this.endpoint, release, off: [...(logsOn ? [] : ['logs' as const]), ...(metricsOn ? [] : ['metrics' as const])] });
+    debug(`exporters: ${this.endpoint}/v1/traces, /v1/logs, /v1/metrics key=${keyHint(apiKey)}`);
     let exporter = o.exporter as SpanExporter | undefined;
     if (!exporter) {
       const url = `${this.endpoint}/v1/traces`;
@@ -258,6 +269,7 @@ export class Client implements InitStatus {
       exporter = new OTLPTraceExporter({ url, headers: this.headers });
       // spans and log records spool to their own subdirectories
       if (o.bufferDir) exporter = new SpoolExporter(exporter, nodePath.join(o.bufferDir, 'traces'), url, this.headers, this.fetch);
+      exporter = watchSpans(exporter, line);
     }
     const keepNoisy = o.noisySpans ?? env.WT_NOISY_SPANS === '1';
     const user = o.spanFilter;
@@ -292,7 +304,6 @@ export class Client implements InitStatus {
     }
     this.tracer = this.provider.getTracer('watchtower');
     // an explicit exporter never switches the other signals off: only `logs` / `metrics` / the env switches do
-    const logsOn = switchOn('WATCHTOWER_LOGS', 'OTEL_LOGS_EXPORTER', o.logs ?? (o.logExporter ? true : undefined));
     this.logs = logsOn ? 'ok' : 'disabled';
     let logExporter = logsOn ? (o.logExporter as LogRecordExporter | undefined) : undefined;
     if (logsOn && !logExporter) {
@@ -300,6 +311,7 @@ export class Client implements InitStatus {
       const { OTLPLogExporter } = needPeer<typeof import('@opentelemetry/exporter-logs-otlp-http')>('@opentelemetry/exporter-logs-otlp-http');
       logExporter = new OTLPLogExporter({ url, headers: this.headers });
       if (o.bufferDir) logExporter = spoolLogs(logExporter, nodePath.join(o.bufferDir, 'logs'), url, this.headers, this.fetch);
+      logExporter = watchLogs(logExporter, line);
     }
     const { LoggerProvider: LP, BatchLogRecordProcessor } = needPeer<typeof import('@opentelemetry/sdk-logs')>('@opentelemetry/sdk-logs');
     this.loggerProvider = new LP({
@@ -307,8 +319,8 @@ export class Client implements InitStatus {
       processors: !logExporter ? [] : [new BatchLogRecordProcessor({ exporter: logExporter })],
     });
     this.logger = this.loggerProvider.getLogger('watchtower');
-    if (switchOn('WATCHTOWER_METRICS', 'OTEL_METRICS_EXPORTER', o.metrics ?? (o.metricExporter ? true : undefined))) {
-      const m = startMetrics(this.endpoint, this.headers, resource, o.bufferDir, this.fetch, o.metricExporter as PushMetricExporter | undefined);
+    if (metricsOn) {
+      const m = startMetrics(this.endpoint, this.headers, resource, o.bufferDir, this.fetch, o.metricExporter as PushMetricExporter | undefined, (e) => watchMetrics(e, line));
       this.meterProvider = m.provider;
       this.stopRuntime = m.stop;
     } else {
@@ -325,10 +337,12 @@ export class Client implements InitStatus {
     const redact = this.redact;
     if (redact) {
       // dotted keys (flattened nested objects) also go through the hook under their leaf name, so a hook keyed on `url` sees `req.url`
-      attrs = Object.fromEntries(Object.entries(attrs).map(([k, v]) => {
+      // a hook returning `undefined` or `DROP` removes the attribute
+      attrs = Object.fromEntries(Object.entries(attrs).flatMap(([k, v]) => {
         v = redact(k, v);
         const leaf = k.slice(k.lastIndexOf('.') + 1);
-        return [k, leaf !== k ? redact(leaf, v) : v];
+        if (!isDrop(v) && leaf !== k) v = redact(leaf, v);
+        return isDrop(v) ? [] : [[k, v]];
       }));
       body = String(redact(LOG_BODY_KEY, body) ?? '');
     }
@@ -514,10 +528,12 @@ function turnOff(why: string): Client {
   return offClient();
 }
 function start(opts: InitOptions): Client {
+  checkLate(opts?.nextInternals !== undefined); // every Next entry point sets nextInternals
   defaultResourceDetectors(); // before any NodeSDK reads OTEL_NODE_RESOURCE_DETECTORS
   const nextMode = opts?.nextInternals ?? (process.env.NEXT_RUNTIME ? 'sample' : undefined);
   if (nextMode) {
-    const own = nextInternalsFilter(nextMode, opts?.nextInternalsRate);
+    const base = nextInternalsFilter(nextMode, opts?.nextInternalsRate);
+    const own = (s: ReadableSpan): boolean => base(s) || (noteDrop('Next.js internal spans (nextInternals sampling)'), false);
     const user = opts.spanFilter;
     opts = { ...opts, nextInternals: undefined, spanFilter: user ? (s) => own(s) && user(s) : own }; // cleared: a second init() never stacks the filter
   }
@@ -529,16 +545,17 @@ function start(opts: InitOptions): Client {
   const env = (process.env.WT_INSTRUMENT || '').trim().toLowerCase();
   const mode = opts?.instrument ?? (env === 'auto' ? 'auto' : !['0', 'off', 'false', 'no'].includes(env));
   if (mode) {
-    const names = instrumentAll({ tracerProvider: c.provider, meterProvider: c.meterProvider }, [c.endpoint, c.apiUrl], mode === 'auto');
+    const names = instrumentAll({ tracerProvider: c.provider, meterProvider: c.meterProvider }, [c.endpoint, c.apiUrl]);
     setHttpServerActive(names.includes('@opentelemetry/instrumentation-http'));
+    const short = names.map((n) => n.replace('@opentelemetry/instrumentation-', ''));
+    try { (c.resource.attributes as Record<string, unknown>)['watchtower.instrumentations'] = short; } catch { /* frozen resource: the log line still names them */ }
     const logOn = opts?.instrumentLog ?? !['0', 'off', 'false', 'no'].includes((process.env.WT_INSTRUMENT_LOG || '').trim().toLowerCase());
-    if (mode === 'auto' && logOn) {
-      console.info(`[watchtower] instrumented: ${names.map((n) => n.replace('@opentelemetry/instrumentation-', '')).join(', ') || 'nothing (no supported package found)'}`);
-    }
-    if (logOn && dbRequireParent(undefined)) {
-      console.info('watchtower: requireParent on; queries outside a span are not recorded (WATCHTOWER_DB_REQUIRE_PARENT=0 to keep them)');
+    if (logOn) {
+      if (short.length) console.info(`[watchtower] instrumented: ${short.join(', ')}`);
+      else console.warn(`[watchtower] WARNING: nothing was instrumented, so http, fetch and database calls are not traced. Install the packages: npm i ${INSTRUMENTATION_PKGS.join(' ')}`);
     }
   }
+  if (process.env.WT_DEPLOY_KEY) void markDeploy(c).then((m) => m && console.info(`[watchtower] ${m}`));
   if (process.env.WT_PROFILING === '1') {
     const attrs = c.resource.attributes;
     c.profiler = startProfiling({

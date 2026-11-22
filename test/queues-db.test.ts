@@ -121,3 +121,21 @@ test('postgres: postgres:query channel becomes client spans with SQLSTATE', asyn
   expect(ins.status).toMatchObject({ code: 2, message: 'SQLSTATE 23505' });
   expect(JSON.stringify(ins.attributes)).not.toContain('42');
 });
+
+test('bullmq: propagate:false writes and reads no _wt, spans stay unlinked', async () => {
+  class Q2 { jobs: any[] = []; constructor(public name: string) {} async add(name: string, data: unknown) { const j = { id: '1', name, data: structuredClone(data), attemptsMade: 0 }; this.jobs.push(j); return j; } }
+  class W2 { constructor(public name: string) {} callProcessJob(_j: unknown) { return Promise.resolve(); } }
+  instrumentBullMQ({ Queue: Q2, Worker: W2 } as never, { propagate: false });
+  const q = new Q2('plain');
+  await trace.getTracer('t').startActiveSpan('request', async (s) => { await q.add('j', { a: 1 }); s.end(); });
+  expect(q.jobs[0].data).toEqual({ a: 1 });
+  const job = { ...q.jobs[0], data: { a: 1, [CONTEXT_KEY]: { traceparent: '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01' } } };
+  await new W2('plain').callProcessJob(job);
+  expect(job.data[CONTEXT_KEY]).toBeDefined(); // left untouched
+  const all = await drain();
+  const req = all.find((s) => s.name === 'request')!;
+  const proc = all.find((s) => s.name === 'process plain')!;
+  expect(all.some((s) => s.name === 'send plain')).toBe(true);
+  expect(proc.spanContext().traceId).not.toBe(req.spanContext().traceId);
+  expect(proc.spanContext().traceId).not.toBe('0af7651916cd43dd8448eb211c80319c');
+});

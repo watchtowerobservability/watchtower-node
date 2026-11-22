@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.9.0 (2026-11-19)
+
+- Fix: with an ingest key and no endpoint the SDK (and the profiler) now exports to `https://ingest.watchtowerops.net`, not `http://localhost:4318`. A failed trace export prints one warning naming the endpoint and `WT_OTLP_ENDPOINT`.
+- `@opentelemetry/instrumentation`, `-http`, `-undici`, `-pg` and `-ioredis` are now `dependencies`, so the `register` preload patches them with no extra install. mysql2 and runtime-node stay optional peers.
+- The instrumented list is always logged once (`[watchtower] instrumented: http, undici, pg`; `WT_INSTRUMENT_LOG=off` silences it), with a WARNING and the `npm i` command when nothing was patched. The names are the `watchtower.instrumentations` resource attribute.
+- The default mode now also patches mysql2, postgres.js and better-sqlite3 when installed (`instrument: 'auto'` is the same as `true`).
+- New: `captureException(err, { route })` (recorded as `http.route`); the Fastify plugin passes the route for 5xx errors. README: "Replacing a Sentry-protocol (GlitchTip) reporter".
+- New: `WT_DEPLOY_KEY` makes `init` post one release and one deployment per `WT_RELEASE` and service (off when unset; never throws).
+- Fastify plugin: new option `captureErrors?: boolean` (default true) for the 5xx `onError` capture. The same Error object is never captured twice, so an app handler that also calls `captureException` yields one event.
+- `instrumentDrizzle` wraps the `tx` passed to `db.transaction(tx => ...)` (and nested transactions) like `db`: statements inside transactions export CLIENT spans under the active span.
+- postgres.js 3.x has no query hook and cannot be instrumented; README now has the migration note (upgrade to 4.x or instrument Drizzle/Kysely).
+- `redact` hook: returning `undefined` or the exported `DROP` symbol removes the attribute (span attributes, event attributes and log attributes) instead of leaving the key.
+- `instrumentBullMQ(bullmq, { propagate: false })` writes and reads no `_wt` trace context in job data; spans are still created, unlinked.
+
+## 0.8.2 (2026-11-18)
+
+- Fix (Next.js standalone): the "loaded too late" warning no longer fires when the SDK starts through a Next entry point (`register` from `@watchtowerobservability/next`, or the deprecated `makeRegister`), or under a standalone `server.js` (which sets `__NEXT_PRIVATE_STANDALONE_CONFIG` but not `NEXT_RUNTIME`). Next loads `http` before instrumentation runs, so the hint never applied there. Verified with unit tests on each case.
+- The status line says `none` (not `pending`) for a signal that exported nothing in the first 90 s, for example `logs:none` for an app that sends no log records.
+
+## 0.8.1 (2026-11-18)
+
+- New: a `[watchtower] loaded too late: http was already imported, so its requests are not traced. Start node with --import @watchtowerobservability/node/register` warning, once per process, when `register` or `init()` loads after `http`/`https` (an ES module app that imports `register` from app code links `http` first, and its requests are then silently untraced). The check reads `process.moduleLoadList` in the first module the SDK evaluates, before its own dependencies load. Silent under Next.js and test runners. Verified: a bare `node --import` process has neither module loaded (no false positive on correct use), and a unit test covers the warning and its once-only guard.
+- New: after the first exports the SDK prints one line, `[watchtower] <service> → <host> traces:ok logs:ok metrics:ok release=<release>` (`pending` until a signal exported, `fail(<status or error>)` for a failed one, `off` for a disabled one; it prints when every signal has a result, at the first failure, or after 90 s). `WT_DEBUG=1` (or `WATCHTOWER_DEBUG=1`) also logs the exporter endpoints (the key as its first 8 characters only), each export result (signal, item count, status or error) and a per-minute count of dropped Next.js internal spans and parentless DB queries. The default OTLP exporters are wrapped, not replaced. Verified with unit tests on the wrappers, line states and the debug output.
+- The startup line `requireParent on; queries outside a span are not recorded` is gone. The first query actually dropped for lack of a parent span prints `[watchtower] dropped a DB query outside any span (requireParent on; WATCHTOWER_DB_REQUIRE_PARENT=0 to keep them)` once (the count is in the `WT_DEBUG` summary). Verified by a test that drops two queries and sees one line.
+- `@watchtowerobservability/node/next` and `/next-build` are marked `@deprecated`: use `@watchtowerobservability/next` (`withWatchtower()` in next.config, `register` in `instrumentation.ts`, `npx wt-next-doctor` after `next build`). They work unchanged. The README gains a "Docker builds and source maps" note: pass the `ci:write` key with `--mount=type=secret`, never as a build `ARG`.
+
 ## 0.8.0 (2026-11-16)
 
 - `init()` never throws. A missing OpenTelemetry package, a missing key or any startup error logs one `[watchtower] telemetry is OFF` warning (listing every missing package and the install command), leaves every helper a no-op and returns a no-op client, so the app boots. Under pnpm this fixes the crash at the first import of `main.ts`.

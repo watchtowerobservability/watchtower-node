@@ -34,3 +34,13 @@ test('pii preset scrubs a flattened remoteAddress and URL scrubbing hits req.url
   expect(a['req.remoteAddress']).toBe('[redacted:ipv4]');
   expect(a['req.url']).toBe('/u/:redacted');
 });
+
+test('redact returning undefined or DROP removes the log attribute', async () => {
+  const { c, out } = client((k, v) => (k === 'password' ? undefined : k === 'url' ? wt.DROP : v));
+  c.log('info', 'x', { password: 'p', user: 'u', 'req.url': '/a' });
+  await c.forceFlush();
+  const a = out[0]!.attributes;
+  expect(a).not.toHaveProperty('password');
+  expect(Object.keys(a)).not.toContain('req.url');
+  expect(a.user).toBe('u');
+});

@@ -1,6 +1,6 @@
 import { test, expect } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { metrics, trace } from '@opentelemetry/api';
+import { metrics, SpanKind, trace } from '@opentelemetry/api';
 import type { ReadableSpan } from '@opentelemetry/sdk-trace';
 import { AggregationTemporality, InMemoryMetricExporter, MeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
 import type { DataPoint, Histogram, MetricData } from '@opentelemetry/sdk-metrics';
@@ -100,6 +100,29 @@ test('drizzle: prepared queries become spans with hash and the N+1 hint', async 
   expect(q[4]!.attributes['db.n_plus_one']).toBeUndefined();
   expect(q[5]!.attributes).toMatchObject({ 'db.n_plus_one': true, 'db.query.repeat_count': 6 });
   expect(JSON.stringify(q[0]!.attributes)).not.toContain('where id');
+});
+
+test('drizzle: statements inside db.transaction(tx => ...) get CLIENT spans under the active span', async () => {
+  const mk = () => ({
+    prepareQuery(_q: { sql: string }) { return { async execute() { return [1]; } }; },
+    async transaction(cb: (tx: unknown) => Promise<unknown>) { const txSession = mk(); return cb({ session: txSession }); },
+  });
+  const db = { session: mk() };
+  instrumentDrizzle(db, 'postgresql');
+  await trace.getTracer('t').startActiveSpan('request', async (s) => {
+    await db.session.transaction(async (tx: any) => {
+      await tx.session.prepareQuery({ sql: 'insert into "orders" (id) values (1)' }).execute();
+      await tx.session.transaction(async (tx2: any) => tx2.session.prepareQuery({ sql: 'select * from "orders"' }).execute()); // nested
+    });
+    s.end();
+  });
+  const all = await drain();
+  const req = all.find((s) => s.name === 'request')!;
+  const ins = all.find((s) => s.name === 'INSERT orders')!;
+  const sel = all.find((s) => s.name === 'SELECT orders')!;
+  expect(ins.parentSpanContext?.spanId).toBe(req.spanContext().spanId);
+  expect(sel.parentSpanContext?.spanId).toBe(req.spanContext().spanId);
+  expect(ins.kind).toBe(SpanKind.CLIENT);
 });
 
 test('kysely, sequelize and mikro-orm log hooks record finished spans', async () => {

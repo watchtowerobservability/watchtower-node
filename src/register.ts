@@ -1,11 +1,13 @@
 // Preload entry: `node --import @watchtowerobservability/node/register app.mjs` (ESM) or `node -r @watchtowerobservability/node/register app.js` (CommonJS).
-// Starts the SDK from WT_*/OTEL_* env before the app loads, so http, fetch, pg and ioredis are patched in time.
+// Starts the SDK from WT_*/OTEL_* env before the app loads, so http, fetch, pg and ioredis (dependencies of this package; other drivers when installed) are patched in time.
 // Without WT_INGEST_KEY it starts nothing and says so.
+import { checkLate } from './late.js'; // first: snapshots which builtins were loaded before the SDK
 import { pathToFileURL } from 'node:url';
 import { register as registerHooks } from 'node:module';
 import { init, setOffReason } from './index.js';
 import { searchPaths } from './load.js';
 
+checkLate();
 if (process.env.WT_INGEST_KEY || process.env.OTEL_EXPORTER_OTLP_HEADERS) {
   try {
     // ESM modules (node:http imported from an ES module) are only patched through OpenTelemetry's loader hook

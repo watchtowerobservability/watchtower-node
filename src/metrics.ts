@@ -21,7 +21,7 @@ interface Runtime { setMeterProvider(p: MeterProvider): void; disable(): void }
 export interface Metrics { provider: MeterProvider; stop(): void }
 
 export function startMetrics(endpoint: string, headers: Record<string, string>, resource: Resource,
-  bufferDir: string | undefined, fetch: typeof globalThis.fetch, exporter?: PushMetricExporter): Metrics {
+  bufferDir: string | undefined, fetch: typeof globalThis.fetch, exporter?: PushMetricExporter, wrap?: (e: PushMetricExporter) => PushMetricExporter): Metrics {
   const sdk = need<typeof import('@opentelemetry/sdk-metrics')>('@opentelemetry/sdk-metrics');
   const url = `${endpoint}/v1/metrics`;
   let exp: PushMetricExporter | undefined = exporter;
@@ -31,6 +31,7 @@ export function startMetrics(endpoint: string, headers: Record<string, string>, 
       ? {} : { temporalityPreference: AggregationTemporalityPreference.DELTA };
     exp = new OTLPMetricExporter({ url, headers, ...delta });
     if (bufferDir) exp = new MetricSpool(exp, nodePath.join(bufferDir, 'metrics'), url, headers, fetch);
+    if (wrap) exp = wrap(exp);
   }
   const interval = Number(process.env.OTEL_METRIC_EXPORT_INTERVAL) || 60000;
   const reader = new sdk.PeriodicExportingMetricReader({

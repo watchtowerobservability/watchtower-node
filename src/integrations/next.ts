@@ -1,8 +1,14 @@
+// Deprecated entry: use `@watchtowerobservability/next` (register, onRequestError, withWatchtower). Still works unchanged.
 // instrumentation.js:  module.exports = require('@watchtowerobservability/node/next');
 //   or, with options: export const register = makeRegister({ redact });  export { onRequestError } from '@watchtowerobservability/node/next';
 import * as wt from '../index.js';
 
-export { withWatchtower, uploadSourcemaps } from './next-build.js';
+import * as build from './next-build.js';
+
+/** @deprecated use `withWatchtower` from `@watchtowerobservability/next` */
+export const withWatchtower: typeof build.withWatchtower = build.withWatchtower;
+/** @deprecated use `uploadSourcemaps` from `@watchtowerobservability/next` */
+export const uploadSourcemaps: typeof build.uploadSourcemaps = build.uploadSourcemaps;
 export type { SourcemapOptions } from './next-build.js';
 export { isNextInternal, nextInternalsFilter } from '../next-filter.js';
 export { tunnelHandler } from './next-tunnel.js';
@@ -10,7 +16,8 @@ export type { TunnelOptions } from './next-tunnel.js';
 
 export type NextOptions = wt.InitOptions;
 
-/** Build a Next.js instrumentation `register` that passes `options` to `init`; no-op off the Node.js runtime or without a key. */
+/** @deprecated use `register` from `@watchtowerobservability/next`.
+ * Build a Next.js instrumentation `register` that passes `options` to `init`; no-op off the Node.js runtime or without a key. */
 export function makeRegister(options: NextOptions = {}): () => Promise<void> {
   return async function register(): Promise<void> {
     const rt = process.env.NEXT_RUNTIME;
@@ -19,10 +26,12 @@ export function makeRegister(options: NextOptions = {}): () => Promise<void> {
   };
 }
 
-/** Next.js instrumentation hook: init from WT_* env on the Node.js runtime; no-op without WT_INGEST_KEY. */
+/** @deprecated use `register` from `@watchtowerobservability/next`.
+ * Next.js instrumentation hook: init from WT_* env on the Node.js runtime; no-op without WT_INGEST_KEY. */
 export const register = makeRegister();
 
-/** Next.js onRequestError: server render, route handler and server action errors. */
+/** @deprecated use `onRequestError` from `@watchtowerobservability/next`.
+ * Next.js onRequestError: server render, route handler and server action errors. */
 export async function onRequestError(
   err: unknown,
   request?: { path?: string; method?: string },

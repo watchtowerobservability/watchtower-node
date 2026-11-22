@@ -1,3 +1,4 @@
+// Deprecated entry (`@watchtowerobservability/node/next-build`): use `@watchtowerobservability/next`. Still works unchanged.
 // Build-time helpers for Next.js: `withWatchtower` (next.config) and `uploadSourcemaps` (after `next build`).
 import * as fs from 'node:fs';
 import * as nodePath from 'node:path';
@@ -115,6 +116,7 @@ const SHA_ENV = ['WT_RELEASE', 'GITHUB_SHA', 'CI_COMMIT_SHA', 'VERCEL_GIT_COMMIT
  * the SDK starts whichever entry instrumentation imports. Sets `NEXT_PUBLIC_WT_RELEASE`. With `sourcemaps` it turns on
  * `productionBrowserSourceMaps` (webpack and Turbopack); `{ upload: true }` uploads and deletes them after the webpack
  * client build, otherwise run `wt-next-sourcemaps` after `next build` (`"build": "next build && wt-next-sourcemaps"`).
+ * @deprecated use `withWatchtower` from `@watchtowerobservability/next`
  */
 export function withWatchtower(config: ConfigOrFn = {}, opts: WatchtowerNextOptions = {}): ConfigOrFn {
   const sm = opts.sourcemaps === true ? {} : opts.sourcemaps || undefined;
@@ -200,11 +202,12 @@ function chunkFor(mapFile: string, name: string): string | undefined {
 }
 
 /**
- * Upload every `.map` under `dir` as `_next/static/<path>` for the release: one `POST /artifacts/bundle` per ~120 MB
+ * Upload every `.map` under `dir` as `_next/static/<path>` for the release: one `POST /artifacts/bundle` per ~32 MB
  * batch (tar.gz plus manifest), falling back to single uploads (8 at a time) when the server has no bundle route.
  * 429/5xx are retried with backoff honoring Retry-After; a failed map does not stop the others. The maps are deleted when none failed. Returns
  * `{uploaded, skipped, failed}`: `skipped` = the server already had those exact bytes (HTTP 200). Bodies are sent
  * gzipped (`Content-Encoding: gzip`).
+ * @deprecated use `@watchtowerobservability/next`
  */
 export async function uploadSourcemaps(o: SourcemapOptions = {}): Promise<{ uploaded: number; skipped: number; failed: number }> {
   const env = process.env;
@@ -272,7 +275,7 @@ export async function uploadSourcemaps(o: SourcemapOptions = {}): Promise<{ uplo
   };
   // One request per batch (tar.gz + manifest). A server without the bundle route (or a request that
   // never got through) falls back to concurrent single uploads for that batch.
-  const BATCH_BYTES = 120 * 1024 * 1024;
+  const BATCH_BYTES = 32 * 1024 * 1024; // smaller requests keep the API's upload memory low
   const batches: Entry[][] = [];
   let cur: Entry[] = [], curBytes = 0;
   for (const e of entries) {

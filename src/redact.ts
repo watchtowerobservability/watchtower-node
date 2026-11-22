@@ -2,6 +2,10 @@
 import type { AttributeValue } from '@opentelemetry/api';
 import type { SpanProcessor } from '@opentelemetry/sdk-trace';
 
+/** Return this (or `undefined`) from a `redact` hook to remove the attribute instead of masking it. */
+export const DROP: unique symbol = Symbol.for('watchtower.redact.drop');
+export const isDrop = (v: unknown): boolean => v === undefined || v === DROP;
+
 export type RedactHook = (key: string, value: unknown) => unknown;
 
 /** Hook keys for the non-attribute fields. Event attributes (incl. exception.message / exception.stacktrace) use their own keys. */
@@ -11,7 +15,11 @@ export const LOG_BODY_KEY = 'log.body';
 
 function attrs(a: Record<string, unknown> | undefined, hook: RedactHook): void {
   if (!a) return;
-  for (const k of Object.keys(a)) a[k] = hook(k, a[k]) as AttributeValue;
+  for (const k of Object.keys(a)) {
+    const v = hook(k, a[k]);
+    if (isDrop(v)) delete a[k];
+    else a[k] = v as AttributeValue;
+  }
 }
 
 /** Assign, falling back to defineProperty if the SDK exposes the field as a getter. */

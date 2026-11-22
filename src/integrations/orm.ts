@@ -9,13 +9,16 @@ const PREPARED = ['execute', 'all', 'get', 'run', 'values'];
 /**
  * `instrumentDrizzle(db, 'postgresql')`: a CLIENT span per query a Drizzle database runs (`system`
  * is the `db.system.name`: postgresql, mysql, sqlite, ...). Call once per `drizzle(...)` instance.
- * shortcut: `db.transaction(tx => ...)` runs on its own session and gets no spans; instrument the
- * driver as well if transactions matter.
+ * Statements inside `db.transaction(tx => ...)` (and nested transactions) are spans too: the `tx` passed
+ * to the callback is wrapped like `db`.
  */
 export function instrumentDrizzle(db: object, system: string, opts?: DbOptions): void {
   const d = db as { session?: object; _?: { session?: object } };
   const session = d.session ?? d._?.session;
-  if (!session) return;
+  if (session) wrapSession(session, system, opts);
+}
+
+function wrapSession(session: object, system: string, opts?: DbOptions): void {
   patch(session, 'prepareQuery', (orig) => function (this: unknown, query: { sql?: string }, ...rest: unknown[]) {
     const pq = orig.call(this, query, ...rest);
     if (pq && typeof pq === 'object') {
@@ -26,6 +29,12 @@ export function instrumentDrizzle(db: object, system: string, opts?: DbOptions):
       }
     }
     return pq;
+  });
+  patch(session, 'transaction', (orig) => function (this: unknown, cb: Fn, ...rest: unknown[]) {
+    return orig.call(this, (tx: { session?: object }, ...a: unknown[]) => {
+      if (tx && typeof tx === 'object' && tx.session) wrapSession(tx.session, system, opts);
+      return cb(tx, ...a);
+    }, ...rest);
   });
 }
 

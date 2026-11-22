@@ -92,3 +92,11 @@ test('ESM load.js is the compiled load.ts: exports load and need, no hand-writte
   expect(src).not.toMatch(/[^.\w]require\(id\)/); // a bare require(id) is webpack's "Critical dependency"
   expect(() => loader.need('@opentelemetry/not-installed-pkg')).toThrow();
 });
+
+test('redact returning undefined or DROP deletes the span attribute', async () => {
+  const { redactor, DROP } = await import('../src/redact.js');
+  const span: any = { name: 'n', status: {}, events: [{ attributes: { a: 1, b: 2 } }], links: [], attributes: { keep: 1, gone: 2, gone2: 3 } };
+  redactor((k, v) => (k === 'gone' || k === 'b' ? undefined : k === 'gone2' ? DROP : v)).onEnd(span);
+  expect(span.attributes).toEqual({ keep: 1 });
+  expect(span.events[0].attributes).toEqual({ a: 1 });
+});

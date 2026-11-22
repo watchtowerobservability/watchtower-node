@@ -147,7 +147,7 @@ export interface ProfilerOptions {
   heapIntervalBytes?: number;
   /** Ingest key; defaults to WT_INGEST_KEY. */
   apiKey?: string;
-  /** Gateway base URL; defaults to WT_OTLP_ENDPOINT or http://localhost:4318. */
+  /** Gateway base URL; defaults to WT_OTLP_ENDPOINT or https://ingest.watchtowerops.net. */
   endpoint?: string;
   /** Defaults to WT_SERVICE or `app`. */
   service?: string;
@@ -263,7 +263,7 @@ export class Profiler {
     const key = o.apiKey ?? process.env.WT_INGEST_KEY;
     if (!key) throw new Error('apiKey is required');
     this.key = key;
-    this.endpoint = o.endpoint ?? process.env.WT_OTLP_ENDPOINT ?? 'http://localhost:4318';
+    this.endpoint = o.endpoint ?? process.env.WT_OTLP_ENDPOINT ?? 'https://ingest.watchtowerops.net'; // a key is required, so this is a real deployment
     this.service = o.service ?? process.env.WT_SERVICE ?? 'app';
     this.tags = { env: process.env.WT_ENVIRONMENT, version: process.env.WT_RELEASE, ...o.tags };
     this.intervalUs = Math.min(Math.max(o.intervalUs ?? 10_000, 1_000), 1_000_000);

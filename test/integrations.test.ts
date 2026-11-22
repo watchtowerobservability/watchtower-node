@@ -152,6 +152,20 @@ test('fastify: hooks produce a span and capture 5xx', async () => {
   expect(named(all, 'exception')).toBeTruthy();
 });
 
+test('fastify: captureErrors:false skips capture; the same Error is captured once', async () => {
+  const mk = (o: object) => { const h: Record<string, (...a: any[]) => void> = {}; plugin({ addHook: (n, f) => { h[n] = f; } }, o, () => {}); return h; };
+  expect(mk({ captureErrors: false }).onError).toBeUndefined();
+  const hooks = mk({});
+  const req = { method: 'GET', url: '/dup', routeOptions: { url: '/dup' } };
+  hooks.onRequest!(req, {}, () => {});
+  const err = new Error('dup-fail');
+  hooks.onError!(req, {}, err, () => {});
+  hooks.onError!(req, {}, err, () => {}); // same object again: no second capture
+  hooks.onResponse!(req, { statusCode: 500 }, () => {});
+  const all = await drain();
+  expect(all.filter((x) => x.name === 'exception')).toHaveLength(1);
+});
+
 test('fastify: enriches the active http server span instead of starting a second one', async () => {
   const hooks: Record<string, (...a: any[]) => void> = {};
   plugin({ addHook: (n, f) => { hooks[n] = f; } }, {}, () => {});

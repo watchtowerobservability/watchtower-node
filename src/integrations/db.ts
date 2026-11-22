@@ -2,8 +2,9 @@
 // statement hash and N+1 hint, connection-pool metrics and embedded-store gauges.
 import * as fs from 'node:fs';
 import * as nodePath from 'node:path';
-import { context, createContextKey, diag, INVALID_SPAN_CONTEXT, metrics, trace, SpanKind, SpanStatusCode } from '@opentelemetry/api';
+import { context, createContextKey, INVALID_SPAN_CONTEXT, metrics, trace, SpanKind, SpanStatusCode } from '@opentelemetry/api';
 import type { Attributes, BatchObservableResult, Context, Counter, Histogram, Meter, Span, TimeInput } from '@opentelemetry/api';
+import { noteDrop } from '../diagnostics.js';
 import { isPgDialect, normalizeAndHash, querySummary } from '../sql.js';
 
 export interface DbOptions {
@@ -67,9 +68,10 @@ let droppedSpans = 0;
 let droppedCounter: { add(n: number): void } | undefined;
 /** Datastore spans dropped so far because `requireParent` found no active parent span. */
 export const droppedDbSpans = (): number => droppedSpans;
-/** Count a dropped span: the `wt.sdk.db.dropped_spans` counter (exported with the SDK's metrics) and one diag warning. */
+/** Count a dropped span: the `wt.sdk.db.dropped_spans` counter (exported with the SDK's metrics) and one console line (the first drop). */
 function dropped(): Span {
-  if (droppedSpans++ === 0) diag.warn('watchtower: a datastore span was dropped because it has no parent span (requireParent); counted in wt.sdk.db.dropped_spans. Set WATCHTOWER_DB_REQUIRE_PARENT=0 to keep such queries as root spans');
+  if (droppedSpans++ === 0) console.info('[watchtower] dropped a DB query outside any span (requireParent on; WATCHTOWER_DB_REQUIRE_PARENT=0 to keep them)');
+  noteDrop('DB queries outside any span');
   droppedCounter ??= metrics.getMeter('watchtower').createCounter('wt.sdk.db.dropped_spans', { description: 'Datastore spans dropped for lack of a parent span (requireParent)' });
   droppedCounter.add(1);
   return trace.wrapSpanContext(INVALID_SPAN_CONTEXT);

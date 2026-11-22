@@ -45,6 +45,8 @@ export interface BullMQOptions {
   captureFailures?: boolean;
   /** Run repeatable jobs (`repeat.pattern`/`cron`) as cron monitors named `<queue>-<job name>`; needs the `ingest:checkins` key scope. */
   cronMonitors?: boolean;
+  /** Default true. `false` writes no `_wt` trace context into job data and reads none: spans are still created, but unlinked. */
+  propagate?: boolean;
 }
 
 /**
@@ -56,6 +58,7 @@ export interface BullMQOptions {
  * shortcut: sandboxed (file path) processors run in a child process and get no consumer span.
  */
 export function instrumentBullMQ(bullmq: BullMQLike, options: BullMQOptions = {}): boolean {
+  const propagate = options.propagate !== false;
   const q = bullmq.Queue.prototype;
   const w = bullmq.Worker.prototype;
   if (q[PATCHED]) return typeof w.callProcessJob === 'function';
@@ -67,7 +70,7 @@ export function instrumentBullMQ(bullmq: BullMQLike, options: BullMQOptions = {}
     if (opts?.delay) attrs['messaging.bullmq.job.delay_ms'] = opts.delay;
     return tracer().startActiveSpan(`send ${this.name}`, { kind: SpanKind.PRODUCER, attributes: attrs }, (span) =>
       run(span, async () => {
-        const job = (await add.call(this, name, inject(data), opts)) as JobLike | undefined;
+        const job = (await add.call(this, name, propagate ? inject(data) : data, opts)) as JobLike | undefined;
         if (job?.id) span.setAttribute('messaging.message.id', job.id);
         return job;
       }));
@@ -78,7 +81,7 @@ export function instrumentBullMQ(bullmq: BullMQLike, options: BullMQOptions = {}
     q.addBulk = function (this: { name: string }, jobs: Array<{ data?: unknown }>) {
       const attrs = { ...base(this.name, 'send', 'addBulk'), 'messaging.batch.message_count': jobs.length };
       return tracer().startActiveSpan(`send ${this.name}`, { kind: SpanKind.PRODUCER, attributes: attrs }, (span) =>
-        run(span, () => addBulk.call(this, jobs.map((j) => ({ ...j, data: inject(j.data) })))));
+        run(span, () => addBulk.call(this, jobs.map((j) => ({ ...j, data: propagate ? inject(j.data) : j.data })))));
     };
   }
 
@@ -86,7 +89,7 @@ export function instrumentBullMQ(bullmq: BullMQLike, options: BullMQOptions = {}
   if (typeof call !== 'function') return false;
   w.callProcessJob = function (this: { name: string }, job: JobLike, ...rest: unknown[]) {
     let parent = context.active();
-    if (isPlainObject(job.data) && isPlainObject(job.data[CONTEXT_KEY])) {
+    if (propagate && isPlainObject(job.data) && isPlainObject(job.data[CONTEXT_KEY])) {
       parent = propagation.extract(parent, job.data[CONTEXT_KEY]);
       delete job.data[CONTEXT_KEY];
     }

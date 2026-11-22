@@ -1,6 +1,6 @@
 {
   "name": "@watchtowerobservability/node",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/watchtowerobservability/watchtower-node.git"
@@ -443,6 +443,11 @@
     "@opentelemetry/exporter-logs-otlp-http": "^0.301.0",
     "@opentelemetry/exporter-metrics-otlp-http": "^0.301.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.301.0",
+    "@opentelemetry/instrumentation": "^0.301.0",
+    "@opentelemetry/instrumentation-http": "^0.301.0",
+    "@opentelemetry/instrumentation-ioredis": "^0.73.0",
+    "@opentelemetry/instrumentation-pg": "^0.78.0",
+    "@opentelemetry/instrumentation-undici": "^0.35.0",
     "@opentelemetry/otlp-transformer": "^0.301.0",
     "@opentelemetry/resources": "^3.1.0",
     "@opentelemetry/sdk-logs": "^3.1.0",
@@ -450,35 +455,15 @@
     "@opentelemetry/sdk-trace": "^3.1.0"
   },
   "peerDependencies": {
-    "@opentelemetry/instrumentation": ">=0.200.0",
-    "@opentelemetry/instrumentation-http": ">=0.200.0",
-    "@opentelemetry/instrumentation-ioredis": ">=0.50.0",
     "@opentelemetry/instrumentation-mysql2": ">=0.40.0",
-    "@opentelemetry/instrumentation-pg": ">=0.50.0",
     "@opentelemetry/instrumentation-runtime-node": ">=0.38.0",
-    "@opentelemetry/instrumentation-undici": ">=0.10.0",
     "winston-transport": "^4.0.0"
   },
   "peerDependenciesMeta": {
-    "@opentelemetry/instrumentation": {
-      "optional": true
-    },
-    "@opentelemetry/instrumentation-http": {
-      "optional": true
-    },
-    "@opentelemetry/instrumentation-ioredis": {
-      "optional": true
-    },
     "@opentelemetry/instrumentation-mysql2": {
       "optional": true
     },
-    "@opentelemetry/instrumentation-pg": {
-      "optional": true
-    },
     "@opentelemetry/instrumentation-runtime-node": {
-      "optional": true
-    },
-    "@opentelemetry/instrumentation-undici": {
       "optional": true
     },
     "winston-transport": {

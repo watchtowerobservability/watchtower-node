@@ -7,6 +7,8 @@ export interface CaptureContext {
   /** false for crashes (uncaught); default true. Keys starting with `wt.` are dropped. */
   handled?: boolean;
   attributes?: Record<string, string | number | boolean | undefined>;
+  /** The route the error happened on (`/users/:id`); recorded as `http.route`. */
+  route?: string;
   /**
    * Exception replay: variables to show on the throwing frame. Node cannot read another frame's locals, so
    * the caller names them. Secret-looking names are masked, values are shortened; the project must also turn
@@ -52,7 +54,7 @@ export function captureException(err: unknown, ctx?: CaptureContext): string {
   const e = err instanceof Error ? err : new Error(typeof err === 'string' ? err : JSON.stringify(err));
   const seen = captured.get(e);
   if (seen !== undefined) return seen;
-  const attrs = { 'error.handled': o.handled !== false, ...dropReserved(o.attributes) };
+  const attrs = { 'error.handled': o.handled !== false, ...(o.route ? { 'http.route': o.route } : {}), ...dropReserved(o.attributes) };
   const active = trace.getActiveSpan();
   const span = active && active.isRecording() ? active : trace.getTracer('watchtower').startSpan('exception');
   span.setAttributes(attrs);
