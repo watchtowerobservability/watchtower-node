@@ -36,7 +36,7 @@ jobs:
       - run: npm pack --ignore-scripts
       - name: Install the packed tarball into a clean project and import it (ESM + CJS)
         run: npm run smoke
-      - uses: actions/attest-build-provenance@v2
+      - uses: actions/attest-build-provenance@v4
         with:
           subject-path: '*.tgz'
       - name: GitHub release
